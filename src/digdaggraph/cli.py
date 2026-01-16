@@ -4,17 +4,138 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from .config import Config
 from .logger import setup_logging, get_logger
-from .parser import load_dig_docs, find_workflow_name, schedule_info
+from .parser import load_dig_docs, find_workflow_name, schedule_info, is_task_key, task_operator
 from .graph import build_interactive_graph
 from .templates import TemplateManager
+from .context_pack import build_context_pack, write_context_pack
 from .exceptions import DigdagGraphError
 from . import __version__
 
 logger = get_logger(__name__)
+
+
+def _summarize_workflow(
+    doc: Dict[str, Any],
+    workflow_name: str,
+    base_path: Path,
+    search_roots: List[Path],
+    extractor: Optional[Any]
+) -> Dict[str, Any]:
+    summary = {
+        "task_count": 0,
+        "operators": {},
+        "td_queries": 0,
+        "input_tables": 0,
+        "output_tables": 0,
+        "table_count": 0,
+        "input_table_list": [],
+        "output_table_list": [],
+        "has_error_handlers": False,
+        "has_parallel": False,
+        "has_retry": False,
+        "lineage_task_count": 0,
+        "lineage_resolved_tasks": 0,
+        "lineage_unresolved_tasks": 0,
+        "lineage_issues": [],
+        "lineage_issue_count": 0,
+    }
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if is_task_key(key):
+                    summary["task_count"] += 1
+                    if isinstance(value, dict):
+                        op_pair = task_operator(value)
+                        if op_pair:
+                            op = op_pair[0]
+                            summary["operators"][op] = summary["operators"].get(op, 0) + 1
+                        if "_error" in value:
+                            summary["has_error_handlers"] = True
+                        if value.get("_parallel"):
+                            summary["has_parallel"] = True
+                        if "retry" in value:
+                            summary["has_retry"] = True
+                        walk(value)
+                    elif isinstance(value, list):
+                        walk(value)
+                    continue
+                if isinstance(value, (dict, list)):
+                    walk(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(doc)
+    summary["td_queries"] = summary["operators"].get("td>", 0)
+
+    if extractor:
+        # Create simple workflow doc wrapper
+        class SimpleWorkflowDoc:
+            def __init__(self, name, content, tasks):
+                self.name = name
+                self.content = content
+                self.tasks = tasks
+
+        workflow_doc = SimpleWorkflowDoc(
+            name=workflow_name,
+            content=doc,
+            tasks={k: v for k, v in doc.items() if k.startswith('+')}
+        )
+        try:
+            task_lineages = extractor.extract_from_workflow(
+                workflow_doc,
+                base_path,
+                search_roots=search_roots
+            )
+        except Exception as e:
+            logger.debug(f"Failed to extract lineage summary for {workflow_name}: {e}")
+            task_lineages = []
+
+        sources = set()
+        targets = set()
+        resolved_count = 0
+        issues = []
+        for task_lineage in task_lineages:
+            lineage = task_lineage.lineage
+            if not lineage:
+                issues.append({
+                    "task": task_lineage.task_name,
+                    "file": task_lineage.sql_file or "",
+                    "template_variables": [],
+                    "error": "missing_lineage",
+                })
+                continue
+            if not lineage.resolved:
+                issues.append({
+                    "task": task_lineage.task_name,
+                    "file": task_lineage.sql_file or "",
+                    "template_variables": lineage.template_variables or [],
+                    "error": lineage.error or "",
+                })
+                continue
+            resolved_count += 1
+            for source in lineage.sources:
+                sources.add(source.full_name)
+            for target in lineage.targets:
+                targets.add(target.full_name)
+
+        summary["input_tables"] = len(sources)
+        summary["output_tables"] = len(targets)
+        summary["table_count"] = len(sources | targets)
+        summary["input_table_list"] = sorted(sources)
+        summary["output_table_list"] = sorted(targets)
+        summary["lineage_task_count"] = len(task_lineages)
+        summary["lineage_resolved_tasks"] = resolved_count
+        summary["lineage_unresolved_tasks"] = len(task_lineages) - resolved_count
+        summary["lineage_issues"] = issues
+        summary["lineage_issue_count"] = len(issues)
+
+    return summary
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -259,6 +380,12 @@ def main(argv=None):
             logger.error("")
             logger.error("💡 Tip: Use --verbose to see which files were found")
             return 1
+
+        # Determine if input_path is a single project or a workspace
+        # If input_path contains any .dig files directly, it's a single project.
+        is_single_project = False
+        if input_path.is_dir():
+            is_single_project = any(input_path.glob('*.dig'))
         
         # Handle lineage extraction if requested
         if args.lineage or args.lineage_all:
@@ -283,11 +410,25 @@ def main(argv=None):
                     content=doc,
                     tasks={k: v for k, v in doc.items() if k.startswith('+')}
                 )
+
+                # Determine project root for this specific workflow
+                if is_single_project:
+                    current_project_root = input_path
+                elif input_path.is_dir():
+                    # Workspace mode: project root is the top-level directory inside input_path
+                    rel_parts = file_path.relative_to(input_path).parts
+                    if rel_parts:
+                        current_project_root = input_path / rel_parts[0]
+                    else:
+                        current_project_root = input_path
+                else:
+                    current_project_root = file_path.parent
                 
                 # Extract lineage
                 task_lineages = extractor.extract_from_workflow(
                     workflow_doc,
-                    file_path.parent
+                    file_path.parent,
+                    search_roots=[current_project_root]
                 )
                 
                 # Add to graph
@@ -388,13 +529,16 @@ def main(argv=None):
         
         # Initialize template manager
         template_mgr = TemplateManager(template_dir=config['template_dir'])
+        summary_extractor = None
+        try:
+            from .lineage import WorkflowLineageExtractor
+            summary_extractor = WorkflowLineageExtractor()
+        except Exception as e:
+            logger.debug(f"Failed to initialize lineage extractor for summaries: {e}")
+        sql_files: List[Dict[str, Any]] = []
+        sql_files_seen = set()
+        lineage_issues: List[Dict[str, Any]] = []
         
-        # Determine if input_path is a single project or a workspace
-        # If input_path contains any .dig files directly, it's a single project.
-        is_single_project = False
-        if input_path.is_dir():
-             is_single_project = any(input_path.glob('*.dig'))
-
         for file_path, doc in docs:
             try:
                 # Determine project root for this specific workflow
@@ -421,6 +565,62 @@ def main(argv=None):
                 )
                 
                 wf_name = find_workflow_name(doc, file_path)
+                summary = _summarize_workflow(
+                    doc,
+                    wf_name,
+                    file_path.parent,
+                    [current_project_root],
+                    summary_extractor
+                )
+                if summary.get("lineage_issues"):
+                    for issue in summary["lineage_issues"]:
+                        lineage_issues.append({
+                            "workflow": wf_name,
+                            "task": issue.get("task", ""),
+                            "file": issue.get("file", ""),
+                            "template_variables": issue.get("template_variables", []),
+                            "error": issue.get("error", ""),
+                        })
+
+                if summary_extractor:
+                    try:
+                        td_tasks = summary_extractor._find_td_operators(doc, wf_name)
+                        for task_path, sql_value, task_def, is_inline in td_tasks:
+                            if not isinstance(sql_value, str) or not sql_value.strip():
+                                continue
+                            inline = is_inline
+                            sql_path = None
+                            is_file = False
+                            if not inline:
+                                sql_path, is_file = summary_extractor._resolve_sql_path(
+                                    sql_value,
+                                    file_path.parent,
+                                    [current_project_root]
+                                )
+                            if not is_file:
+                                inline = True
+                            exists = bool(sql_path and sql_path.exists()) if not inline else True
+                            resolved_path = ""
+                            if sql_path:
+                                try:
+                                    resolved_path = str(sql_path.relative_to(input_path))
+                                except ValueError:
+                                    resolved_path = str(sql_path)
+                            file_label = sql_value if not inline else f"inline:{task_path}"
+                            key = (wf_name, task_path, file_label, inline)
+                            if key in sql_files_seen:
+                                continue
+                            sql_files_seen.add(key)
+                            sql_files.append({
+                                "workflow": wf_name,
+                                "task": task_path,
+                                "file": file_label,
+                                "resolved_path": resolved_path,
+                                "exists": exists,
+                                "inline": inline,
+                            })
+                    except Exception as e:
+                        logger.debug(f"Failed to collect SQL files for {wf_name}: {e}")
                 
                 # Render interactive HTML
                 html_filename = f"{file_path.stem}.html"
@@ -428,7 +628,8 @@ def main(argv=None):
                     wf_name=wf_name,
                     svg_content=svg_content,
                     task_defs=task_defs,
-                    output_path=output_dir / html_filename
+                    output_path=output_dir / html_filename,
+                    summary=summary
                 )
                 cron, tz = schedule_info(doc)
                 
@@ -453,7 +654,8 @@ def main(argv=None):
                     'timezone': tz,
                     'timezone': tz,
                     'graph': html_filename,  # Link to interactive HTML
-                    'project': project_name  # Add project name for filtering
+                    'project': project_name,  # Add project name for filtering
+                    'summary': summary,
                 })
                 
                 # Collect schedule info
@@ -509,11 +711,25 @@ def main(argv=None):
                 content=doc,
                 tasks={k: v for k, v in doc.items() if k.startswith('+')}
             )
+
+            # Determine project root for this specific workflow
+            if is_single_project:
+                current_project_root = input_path
+            elif input_path.is_dir():
+                # Workspace mode: project root is the top-level directory inside input_path
+                rel_parts = file_path.relative_to(input_path).parts
+                if rel_parts:
+                    current_project_root = input_path / rel_parts[0]
+                else:
+                    current_project_root = input_path
+            else:
+                current_project_root = file_path.parent
             
             # Extract lineage
             task_lineages = extractor.extract_from_workflow(
                 workflow_doc,
-                file_path.parent
+                file_path.parent,
+                search_roots=[current_project_root]
             )
             
             # Add to graph
@@ -577,6 +793,18 @@ def main(argv=None):
         
         # Render lineage page
         template_mgr.render_lineage_page(lineage_data, output_dir / "lineage.html")
+
+        # Generate context pack for AI agents
+        context = build_context_pack(
+            workflows=workflows,
+            lineage_data=lineage_data,
+            sql_files=sql_files,
+            lineage_issues=lineage_issues,
+            input_path=input_path,
+            output_dir=output_dir,
+            tool_version=__version__,
+        )
+        write_context_pack(context, output_dir)
         
         # Summary
         logger.info("")

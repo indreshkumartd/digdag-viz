@@ -1,10 +1,20 @@
 # Ad-hoc Analysis - Unscheduled
-# Demonstrates: unscheduled workflow, Python operator, parallel tasks
+# Demonstrates: unscheduled workflow, Python operator, parallel tasks, branching
 
 +prepare_data:
   td>: queries/prepare_analysis.sql
   database: analytics
   create_table: staging.analysis_prep
+
++segment_analysis:
+  for_each>:
+    region: [us, eu, apac]
+  _do:
+    +analyze_segment:
+      td>:
+        query: queries/segment_analysis.sql
+      database: analytics
+      create_table: golden.segment_summary_${region}
 
 +parallel_analysis:
   _parallel: true
@@ -18,6 +28,15 @@
   +export_results:
     sh>: scripts/export_results.sh
 
++conditional_publish:
+  if>: ${publish}
+  _do:
+    +publish_report:
+      sh>: scripts/publish_report.sh
+  _else_do:
+    +skip_publish:
+      echo>: "Publish skipped"
+
 +consolidate_results:
   td>: queries/consolidate.sql
   database: analytics
@@ -25,3 +44,6 @@
 
 +notify_completion:
   echo>: "Analysis complete - check golden.analysis_results"
+
++cleanup_temp:
+  rb>: scripts/cleanup.rb

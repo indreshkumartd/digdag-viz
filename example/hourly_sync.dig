@@ -5,8 +5,13 @@ _schedule:
   cron: "0 * * * *"
   timezone: UTC
 
++poll_source_ready:
+  loop>: 3
+  sh>: scripts/poll_source.sh
+
 +sync_clickstream:
-  td>: queries/sync_clickstream.sql
+  td>:
+    query: queries/sync_clickstream.sql
   database: analytics
   create_table: src_raw.clickstream_events
 
@@ -14,6 +19,13 @@ _schedule:
   td>: queries/update_staging_clickstream.sql
   database: analytics
   insert_into: staging.clickstream_aggregated
+  retry: 2
+  _error:
+    +log_sync_failure:
+      echo>: "Sync failed for ${session_time}"
 
 +log_completion:
   echo>: "Hourly sync completed for ${session_time}"
+
++notify_webhook:
+  http_call>: https://example.com/webhook?workflow=hourly_sync&status=ok

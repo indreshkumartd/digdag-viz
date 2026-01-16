@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+import json
 from jinja2 import Environment, FileSystemLoader, select_autoescape, Template
 
 from .exceptions import ConfigurationError
@@ -17,14 +18,12 @@ DEFAULT_SCHEDULE_TEMPLATE = """<!doctype html>
 <meta charset="utf-8">
 <title>Scheduled Workflows - Digdag Graph</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     --primary: #1a365d;
     --primary-light: #2c5282;
     --accent: #3182ce;
+    --font-sans: "Inter", "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
     --gray-50: #f7fafc;
     --gray-100: #edf2f7;
     --gray-200: #e2e8f0;
@@ -65,7 +64,7 @@ DEFAULT_SCHEDULE_TEMPLATE = """<!doctype html>
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { 
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: var(--font-sans);
     background: var(--bg-body); color: var(--text-main); font-size: 14px; line-height: 1.5;
     min-height: 100vh; display: flex; flex-direction: column;
     transition: background 0.3s ease, color 0.3s ease;
@@ -111,7 +110,7 @@ DEFAULT_SCHEDULE_TEMPLATE = """<!doctype html>
   .controls { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
   input[type="search"], select {
     background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border-color);
-    border-radius: 6px; padding: 10px 14px; outline: none; font-family: 'Inter', sans-serif;
+    border-radius: 6px; padding: 10px 14px; outline: none; font-family: var(--font-sans);
     font-size: 14px; transition: all 0.2s;
   }
   input[type="search"] { flex: 1; min-width: 250px; }
@@ -289,15 +288,13 @@ DEFAULT_INDEX_TEMPLATE = """<!doctype html>
   <meta charset="utf-8">
   <title>Digdag Workflows - Digdag Graph</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --primary: #1a365d;
       --primary-light: #2c5282;
       --accent: #3182ce;
       --success: #38a169;
+      --font-sans: "Inter", "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
       --gray-50: #f7fafc;
       --gray-100: #edf2f7;
       --gray-200: #e2e8f0;
@@ -337,7 +334,7 @@ DEFAULT_INDEX_TEMPLATE = """<!doctype html>
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--font-sans);
       background: var(--bg-body); color: var(--text-main); font-size: 14px; line-height: 1.5;
       min-height: 100vh; display: flex; flex-direction: column;
       transition: background 0.3s ease, color 0.3s ease;
@@ -375,6 +372,13 @@ DEFAULT_INDEX_TEMPLATE = """<!doctype html>
       transition: all 0.2s;
     }
     .theme-toggle:hover { background: rgba(255,255,255,0.2); }
+    .header-btn {
+      background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
+      color: white; padding: 8px 12px; border-radius: 6px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .header-btn:hover { background: rgba(255,255,255,0.2); }
 
     main { flex: 1; padding: 32px; max-width: 1200px; width: 100%; margin: 0 auto; background: var(--bg-body); transition: background 0.3s ease; }
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; color: var(--text-main); }
@@ -383,7 +387,7 @@ DEFAULT_INDEX_TEMPLATE = """<!doctype html>
     .controls { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
     input[type="search"], select {
       background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border-color);
-      border-radius: 6px; padding: 10px 14px; outline: none; font-family: 'Inter', sans-serif;
+      border-radius: 6px; padding: 10px 14px; outline: none; font-family: var(--font-sans);
       font-size: 14px; transition: all 0.2s;
     }
     input[type="search"] { flex: 1; min-width: 250px; }
@@ -423,6 +427,23 @@ DEFAULT_INDEX_TEMPLATE = """<!doctype html>
       display: inline-block; background: var(--success); color: white;
       padding: 4px 10px; border-radius: 4px; font-size: 12px;
       font-weight: 500; margin-top: 8px;
+    }
+    .badge-row {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
+    }
+    .summary-badge {
+      background: var(--bg-main); color: var(--text-main);
+      border: 1px solid var(--border-color); border-radius: 999px;
+      padding: 3px 10px; font-size: 12px; font-weight: 600;
+    }
+    .summary-badge.warn {
+      background: #fff4d6; color: #7b4a00; border-color: #f6d28b;
+    }
+    [data-theme="dark"] .summary-badge {
+      background: #3b4758; border-color: #556; color: #f7fafc;
+    }
+    [data-theme="dark"] .summary-badge.warn {
+      background: #5a3d00; border-color: #8a5a00; color: #ffe4a6;
     }
     .quick-links {
       display: flex; gap: 12px; margin-top: 32px; padding-top: 32px;
@@ -498,6 +519,26 @@ DEFAULT_INDEX_TEMPLATE = """<!doctype html>
         {% if wf.schedule %}
         <p>Schedule: <code>{{ wf.schedule }}</code></p>
         <span class="schedule-badge">Scheduled</span>
+        {% endif %}
+        {% if wf.summary %}
+        <div class="badge-row">
+          <span class="summary-badge">Tasks {{ wf.summary.task_count }}</span>
+          {% if wf.summary.td_queries %}
+          <span class="summary-badge">TD {{ wf.summary.td_queries }}</span>
+          {% endif %}
+          {% if wf.summary.input_tables %}
+          <span class="summary-badge">Inputs {{ wf.summary.input_tables }}</span>
+          {% endif %}
+          {% if wf.summary.output_tables %}
+          <span class="summary-badge">Outputs {{ wf.summary.output_tables }}</span>
+          {% endif %}
+          {% if wf.summary.has_error_handlers %}
+          <span class="summary-badge warn">_error</span>
+          {% endif %}
+          {% if wf.summary.has_parallel %}
+          <span class="summary-badge warn">_parallel</span>
+          {% endif %}
+        </div>
         {% endif %}
         {% if wf.graph %}
         <p><a href="{{ wf.graph }}">View Graph →</a></p>
@@ -600,14 +641,12 @@ DEFAULT_UNSCHEDULED_TEMPLATE = """<!doctype html>
   <meta charset="utf-8">
   <title>Unscheduled Workflows - Digdag Graph</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --primary: #1a365d;
       --primary-light: #2c5282;
       --accent: #3182ce;
+      --font-sans: "Inter", "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
       --gray-50: #f7fafc;
       --gray-100: #edf2f7;
       --gray-200: #e2e8f0;
@@ -647,7 +686,7 @@ DEFAULT_UNSCHEDULED_TEMPLATE = """<!doctype html>
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--font-sans);
       background: var(--bg-body); color: var(--text-main); font-size: 14px; line-height: 1.5;
       min-height: 100vh; display: flex; flex-direction: column;
       transition: background 0.3s ease, color 0.3s ease;
@@ -693,7 +732,7 @@ DEFAULT_UNSCHEDULED_TEMPLATE = """<!doctype html>
     .controls { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
     input[type="search"], select {
       background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border-color);
-      border-radius: 6px; padding: 10px 14px; outline: none; font-family: 'Inter', sans-serif;
+      border-radius: 6px; padding: 10px 14px; outline: none; font-family: var(--font-sans);
       font-size: 14px; transition: all 0.2s;
     }
     input[type="search"] { flex: 1; min-width: 250px; }
@@ -728,6 +767,23 @@ DEFAULT_UNSCHEDULED_TEMPLATE = """<!doctype html>
     .badge { 
       background: var(--accent); color: white; border-radius: 999px;
       padding: 4px 12px; font-size: 12px; font-weight: 500;
+    }
+    .badge-row {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+    }
+    .summary-badge {
+      background: var(--gray-100); color: var(--text-main);
+      border: 1px solid var(--border-color); border-radius: 999px;
+      padding: 3px 10px; font-size: 11px; font-weight: 600;
+    }
+    .summary-badge.warn {
+      background: #fff4d6; color: #7b4a00; border-color: #f6d28b;
+    }
+    [data-theme="dark"] .summary-badge {
+      background: #3b4758; border-color: #556; color: #f7fafc;
+    }
+    [data-theme="dark"] .summary-badge.warn {
+      background: #5a3d00; border-color: #8a5a00; color: #ffe4a6;
     }
     a { color: var(--accent); text-decoration: none; font-weight: 500; }
     a:hover { text-decoration: underline; }
@@ -789,7 +845,29 @@ DEFAULT_UNSCHEDULED_TEMPLATE = """<!doctype html>
       {% for wf in workflows %}
       <tr data-project="{{ wf.project }}">
         <td class="c-project">{{ wf.project }}</td>
-        <td class="c-workflow"><a href="{{ wf.graph }}">{{ wf.name }}</a></td>
+        <td class="c-workflow">
+          <a href="{{ wf.graph }}">{{ wf.name }}</a>
+          {% if wf.summary %}
+          <div class="badge-row">
+            <span class="summary-badge">Tasks {{ wf.summary.task_count }}</span>
+            {% if wf.summary.td_queries %}
+            <span class="summary-badge">TD {{ wf.summary.td_queries }}</span>
+            {% endif %}
+            {% if wf.summary.input_tables %}
+            <span class="summary-badge">In {{ wf.summary.input_tables }}</span>
+            {% endif %}
+            {% if wf.summary.output_tables %}
+            <span class="summary-badge">Out {{ wf.summary.output_tables }}</span>
+            {% endif %}
+            {% if wf.summary.has_error_handlers %}
+            <span class="summary-badge warn">_error</span>
+            {% endif %}
+            {% if wf.summary.has_parallel %}
+            <span class="summary-badge warn">_parallel</span>
+            {% endif %}
+          </div>
+          {% endif %}
+        </td>
         <td class="c-file"><code>{{ wf.file }}</code></td>
       </tr>
       {% endfor %}
@@ -870,10 +948,6 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
   <meta charset="utf-8">
   <title>{{ wf_name }} - Digdag Workflow Graph</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/@panzoom/panzoom@4.5.1/dist/panzoom.min.js"></script>
   <style>
     :root {
       --primary: #1a365d;
@@ -882,6 +956,7 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
       --success: #38a169;
       --warning: #d69e2e;
       --error: #e53e3e;
+      --font-sans: "Inter", "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
       
       /* Light Mode Colors */
       --bg-body: #ffffff;
@@ -915,7 +990,7 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { 
       margin: 0; height: 100vh; display: flex; flex-direction: column;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--font-sans);
       background: var(--bg-body); color: var(--text-main); overflow: hidden;
       font-size: 14px; line-height: 1.5;
       -webkit-font-smoothing: antialiased;
@@ -958,7 +1033,7 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
       background: rgba(255,255,255,0.1); border: 1px solid transparent;
       color: white; padding: 8px 16px 8px 36px; border-radius: 6px;
       font-size: 14px; width: 240px; outline: none;
-      font-family: 'Inter', sans-serif; transition: all 0.2s ease;
+      font-family: var(--font-sans); transition: all 0.2s ease;
     }
     .search-box input::placeholder { color: rgba(255, 255, 255, 0.5); }
     .search-box input:focus { 
@@ -1007,6 +1082,10 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
     .edge polygon { fill: var(--text-muted); stroke: var(--text-muted); }
     
     .node.highlighted polygon, .node.highlighted ellipse, .node.highlighted path {
+      stroke: var(--accent) !important; stroke-width: 3px !important;
+      filter: drop-shadow(0 0 8px rgba(49, 130, 206, 0.4));
+    }
+    .node.focused polygon, .node.focused ellipse, .node.focused path {
       stroke: var(--accent) !important; stroke-width: 3px !important;
       filter: drop-shadow(0 0 8px rgba(49, 130, 206, 0.4));
     }
@@ -1067,6 +1146,63 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
       transform: translateY(-1px); box-shadow: 0 4px 6px var(--shadow-color);
     }
     .btn:active { transform: translateY(0); }
+    
+    .summary-bar {
+      position: absolute; top: 16px; left: 16px; right: 16px;
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      background: var(--bg-card); border: 1px solid var(--border-color);
+      border-radius: 8px; padding: 8px 12px; z-index: 50;
+      box-shadow: 0 2px 4px var(--shadow-color);
+    }
+    .summary-title {
+      font-size: 11px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .summary-badge {
+      background: var(--gray-100); color: var(--text-main);
+      border: 1px solid var(--border-color); border-radius: 999px;
+      padding: 3px 10px; font-size: 12px; font-weight: 600;
+    }
+    .summary-badge.warn {
+      background: #fff4d6; color: #7b4a00; border-color: #f6d28b;
+    }
+    [data-theme="dark"] .summary-badge {
+      background: #3b4758; border-color: #556; color: #f7fafc;
+    }
+    [data-theme="dark"] .summary-badge.warn {
+      background: #5a3d00; border-color: #8a5a00; color: #ffe4a6;
+    }
+    
+    .tour-panel {
+      position: fixed; left: 24px; bottom: 24px; width: 320px;
+      background: var(--bg-card); border: 1px solid var(--border-color);
+      border-radius: 10px; box-shadow: 0 8px 16px var(--shadow-color);
+      z-index: 1200; display: none;
+    }
+    .tour-panel.open { display: block; }
+    .tour-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 14px; border-bottom: 1px solid var(--border-color);
+      font-weight: 600; color: var(--text-main);
+    }
+    .tour-close {
+      background: transparent; border: none; cursor: pointer;
+      font-size: 18px; color: var(--text-muted);
+    }
+    .tour-body { padding: 14px; }
+    .tour-step { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+    .tour-text { font-size: 14px; color: var(--text-main); }
+    .tour-controls {
+      display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border-color);
+    }
+    .tour-controls button {
+      flex: 1; border: 1px solid var(--border-color); background: var(--bg-main);
+      color: var(--text-main); border-radius: 6px; padding: 8px 10px;
+      font-size: 13px; cursor: pointer;
+    }
+    .tour-controls button.primary {
+      background: var(--accent); border-color: var(--accent); color: white;
+    }
   </style>
 </head>
 <body>
@@ -1089,6 +1225,8 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
         <span class="search-icon">🔍</span>
         <input type="text" id="searchInput" placeholder="Search tasks..." />
       </div>
+      <button class="header-btn" id="tourBtn">Tour</button>
+      <button class="header-btn" id="copyLinkBtn" title="Copy deep link">Copy Link</button>
       <button class="theme-toggle" id="themeToggle" title="Toggle Dark Mode">
         <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
@@ -1097,7 +1235,33 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
     </div>
   </header>
   
-  <main id="scene">{{ svg_content | safe }}</main>
+  <main id="scene">
+    {% if summary %}
+    <div class="summary-bar">
+      <span class="summary-title">Summary</span>
+      <span class="summary-badge">Tasks {{ summary.task_count }}</span>
+      {% if summary.td_queries %}
+      <span class="summary-badge">TD {{ summary.td_queries }}</span>
+      {% endif %}
+      {% if summary.input_tables %}
+      <span class="summary-badge">Inputs {{ summary.input_tables }}</span>
+      {% endif %}
+      {% if summary.output_tables %}
+      <span class="summary-badge">Outputs {{ summary.output_tables }}</span>
+      {% endif %}
+      {% if summary.has_error_handlers %}
+      <span class="summary-badge warn">_error</span>
+      {% endif %}
+      {% if summary.has_parallel %}
+      <span class="summary-badge warn">_parallel</span>
+      {% endif %}
+      {% if summary.has_retry %}
+      <span class="summary-badge warn">retry</span>
+      {% endif %}
+    </div>
+    {% endif %}
+    {{ svg_content | safe }}
+  </main>
   
   <div id="sidebar">
     <div class="sidebar-header">
@@ -1117,21 +1281,88 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
     <button class="btn" onclick="resetZoom()" title="Reset">⟲</button>
   </div>
   
+  <div class="tour-panel" id="tourPanel">
+    <div class="tour-header">
+      Guided Tour
+      <button class="tour-close" id="tourCloseBtn">×</button>
+    </div>
+    <div class="tour-body">
+      <div class="tour-step" id="tourStep"></div>
+      <div class="tour-text" id="tourText"></div>
+    </div>
+    <div class="tour-controls">
+      <button id="tourPrevBtn">Prev</button>
+      <button class="primary" id="tourNextBtn">Next</button>
+    </div>
+  </div>
+  
   <script>
     // Task Definitions
     const taskDefs = {{ task_defs | safe }};
     
-    // Panzoom Initialization
+    // Pan/Zoom (offline, no external deps)
     const scene = document.getElementById('scene');
     const svgElement = scene.querySelector('svg');
-    const panzoomInstance = Panzoom(svgElement, {
-      maxScale: 5, minScale: 0.1, startScale: 1, canvas: true
-    });
-    scene.parentElement.addEventListener('wheel', panzoomInstance.zoomWithWheel);
+    svgElement.style.transformOrigin = '0 0';
+    let panX = 0;
+    let panY = 0;
+    let scale = 1;
+    let isPanning = false;
+    let panStartX = 0;
+    let panStartY = 0;
     
-    function zoomIn() { panzoomInstance.zoomIn(); }
-    function zoomOut() { panzoomInstance.zoomOut(); }
-    function resetZoom() { panzoomInstance.reset(); }
+    function applyTransform() {
+      svgElement.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    }
+    
+    function zoomAt(multiplier, clientX, clientY) {
+      const rect = scene.getBoundingClientRect();
+      const offsetX = clientX - rect.left;
+      const offsetY = clientY - rect.top;
+      const prevScale = scale;
+      scale = Math.min(5, Math.max(0.1, scale * multiplier));
+      const ratio = scale / prevScale;
+      panX = offsetX - ratio * (offsetX - panX);
+      panY = offsetY - ratio * (offsetY - panY);
+      applyTransform();
+    }
+    
+    scene.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const multiplier = e.deltaY > 0 ? 0.9 : 1.1;
+      zoomAt(multiplier, e.clientX, e.clientY);
+    }, { passive: false });
+    
+    scene.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('.node') || e.target.closest('a')) return;
+      isPanning = true;
+      panStartX = e.clientX - panX;
+      panStartY = e.clientY - panY;
+    });
+    
+    window.addEventListener('mousemove', (e) => {
+      if (!isPanning) return;
+      panX = e.clientX - panStartX;
+      panY = e.clientY - panStartY;
+      applyTransform();
+    });
+    
+    window.addEventListener('mouseup', () => { isPanning = false; });
+    
+    function zoomIn() {
+      const rect = scene.getBoundingClientRect();
+      zoomAt(1.1, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    }
+    function zoomOut() {
+      const rect = scene.getBoundingClientRect();
+      zoomAt(0.9, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    }
+    function resetZoom() {
+      panX = 0; panY = 0; scale = 1;
+      applyTransform();
+    }
+    applyTransform();
     
     // Sidebar Logic
     function openSidebar(taskId) {
@@ -1186,12 +1417,66 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
     const searchInput = document.getElementById('searchInput');
     const nodes = Array.from(document.querySelectorAll('.node'));
     const edges = Array.from(document.querySelectorAll('.edge'));
+    const nodeMap = new Map();
+    let focusActive = false;
+    let tourActive = false;
+    
+    nodes.forEach(node => {
+      const title = node.querySelector('title');
+      if (!title) return;
+      const nodeId = title.textContent.trim();
+      nodeMap.set(nodeId, node);
+    });
+    
+    function clearFocus() {
+      focusActive = false;
+      nodes.forEach(n => n.classList.remove('dimmed', 'focused', 'highlighted', 'current', 'upstream', 'downstream'));
+      edges.forEach(e => e.classList.remove('dimmed', 'upstream', 'downstream'));
+    }
+    
+    function centerOnNode(nodeId) {
+      const node = nodeMap.get(nodeId);
+      if (!node) return;
+      const rect = scene.getBoundingClientRect();
+      const box = node.getBBox();
+      const nodeCenterX = (box.x + box.width / 2) * scale;
+      const nodeCenterY = (box.y + box.height / 2) * scale;
+      panX = rect.width / 2 - nodeCenterX;
+      panY = rect.height / 2 - nodeCenterY;
+      applyTransform();
+    }
+    
+    function updateHash(nodeId, isTour) {
+      const params = new URLSearchParams();
+      if (nodeId) params.set('node', nodeId);
+      if (isTour) params.set('tour', '1');
+      const hash = params.toString();
+      if (hash) {
+        history.replaceState(null, '', `#${hash}`);
+      } else {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    }
+    
+    function focusNode(nodeId, options = {}) {
+      const node = nodeMap.get(nodeId);
+      if (!node) return false;
+      focusActive = true;
+      nodes.forEach(n => n.classList.add('dimmed'));
+      edges.forEach(e => e.classList.add('dimmed'));
+      node.classList.remove('dimmed');
+      node.classList.add('focused');
+      if (options.center) centerOnNode(nodeId);
+      if (options.openSidebar) openSidebar(nodeId);
+      if (options.setHash) updateHash(nodeId, options.tour);
+      return true;
+    }
     
     searchInput.addEventListener('input', (e) => {
+      if (tourActive) return;
       const query = e.target.value.toLowerCase().trim();
       if (!query) {
-        nodes.forEach(n => n.classList.remove('dimmed', 'highlighted'));
-        edges.forEach(e => e.classList.remove('dimmed'));
+        clearFocus();
         return;
       }
       
@@ -1251,6 +1536,7 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
       const nodeId = title.textContent.trim();
       
       node.addEventListener('mouseenter', () => {
+        if (tourActive || focusActive) return;
         nodes.forEach(n => n.classList.add('dimmed'));
         edges.forEach(e => e.classList.add('dimmed'));
         
@@ -1308,12 +1594,155 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
       });
       
       node.addEventListener('mouseleave', () => {
+        if (tourActive || focusActive) return;
         nodes.forEach(n => n.classList.remove('dimmed', 'current', 'upstream', 'downstream'));
         edges.forEach(e => e.classList.remove('dimmed', 'upstream', 'downstream'));
       });
       
-      node.addEventListener('click', () => { openSidebar(nodeId); });
+      node.addEventListener('click', () => {
+        focusNode(nodeId, { openSidebar: true, setHash: true, center: false });
+      });
     });
+    
+    function buildTourSteps() {
+      const steps = [];
+      const used = new Set();
+      
+      function addStep(id, title, text) {
+        if (!id || used.has(id)) return;
+        if (!nodeMap.has(id)) return;
+        steps.push({ id, title, text });
+        used.add(id);
+      }
+      
+      const rootId = Array.from(nodeMap.keys()).find(id => id.endsWith('__root'));
+      addStep(rootId, 'Workflow entry', 'This is the start of the workflow.');
+      
+      const tdId = Array.from(nodeMap.entries()).find(([, node]) => {
+        const label = Array.from(node.querySelectorAll('text')).map(t => t.textContent).join(' ');
+        const normalized = label.toLowerCase();
+        return normalized.includes('[td>]') || normalized.includes('📊') || normalized.includes(' td>');
+      });
+      addStep(tdId ? tdId[0] : null, 'Treasure Data query', 'A td> task that reads or writes tables.');
+      
+      const errorId = Array.from(nodeMap.keys()).find(id => id.includes('__error'));
+      addStep(errorId, 'Error handler', 'Fallback logic triggered when a task fails.');
+      
+      let maxNode = null;
+      let maxDegree = -1;
+      Object.entries(dependencyGraph).forEach(([id, outs]) => {
+        if (id.endsWith('__root')) return;
+        if (outs.length > maxDegree) {
+          maxDegree = outs.length;
+          maxNode = id;
+        }
+      });
+      addStep(maxNode, 'Branching point', 'A task with multiple downstream dependencies.');
+      
+      const sinkId = Array.from(nodeMap.keys()).find(id => {
+        if (id.endsWith('__root')) return false;
+        return !dependencyGraph[id] || dependencyGraph[id].length === 0;
+      });
+      addStep(sinkId, 'Workflow end', 'A terminal task that closes the workflow.');
+      
+      return steps;
+    }
+    
+    const tourPanel = document.getElementById('tourPanel');
+    const tourBtn = document.getElementById('tourBtn');
+    const tourCloseBtn = document.getElementById('tourCloseBtn');
+    const tourPrevBtn = document.getElementById('tourPrevBtn');
+    const tourNextBtn = document.getElementById('tourNextBtn');
+    const tourStepEl = document.getElementById('tourStep');
+    const tourTextEl = document.getElementById('tourText');
+    const tourSteps = buildTourSteps();
+    let tourIndex = 0;
+    
+    function showTourStep(index) {
+      if (!tourSteps.length) return;
+      tourIndex = Math.max(0, Math.min(index, tourSteps.length - 1));
+      const step = tourSteps[tourIndex];
+      tourStepEl.textContent = `Step ${tourIndex + 1} of ${tourSteps.length} - ${step.title}`;
+      tourTextEl.textContent = step.text;
+      focusNode(step.id, { openSidebar: true, setHash: true, center: true, tour: true });
+      tourPrevBtn.disabled = tourIndex === 0;
+      tourNextBtn.textContent = tourIndex === tourSteps.length - 1 ? 'Finish' : 'Next';
+    }
+    
+    function openTour(startIndex = 0) {
+      if (!tourSteps.length) return;
+      tourActive = true;
+      tourPanel.classList.add('open');
+      showTourStep(startIndex);
+    }
+    
+    function closeTour() {
+      tourActive = false;
+      tourPanel.classList.remove('open');
+      clearFocus();
+      updateHash(null, false);
+    }
+    
+    if (tourBtn) {
+      tourBtn.addEventListener('click', () => openTour(0));
+    }
+    if (tourCloseBtn) {
+      tourCloseBtn.addEventListener('click', closeTour);
+    }
+    if (tourPrevBtn) {
+      tourPrevBtn.addEventListener('click', () => showTourStep(tourIndex - 1));
+    }
+    if (tourNextBtn) {
+      tourNextBtn.addEventListener('click', () => {
+        if (tourIndex >= tourSteps.length - 1) {
+          closeTour();
+        } else {
+          showTourStep(tourIndex + 1);
+        }
+      });
+    }
+    
+    const copyLinkBtn = document.getElementById('copyLinkBtn');
+    if (copyLinkBtn) {
+      copyLinkBtn.addEventListener('click', async () => {
+        const link = window.location.href;
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(link);
+          } else {
+            const tempInput = document.createElement('input');
+            tempInput.value = link;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+          }
+          copyLinkBtn.textContent = 'Copied';
+          setTimeout(() => { copyLinkBtn.textContent = 'Copy Link'; }, 1000);
+        } catch (e) {
+          window.prompt('Copy this link:', link);
+          copyLinkBtn.textContent = 'Copy failed';
+          setTimeout(() => { copyLinkBtn.textContent = 'Copy Link'; }, 1000);
+        }
+      });
+    }
+    
+    function handleHash() {
+      const hash = window.location.hash.replace(/^#/, '');
+      if (!hash) return;
+      const params = new URLSearchParams(hash);
+      const nodeId = params.get('node');
+      const startTour = params.get('tour') === '1';
+      if (nodeId) {
+        focusNode(nodeId, { openSidebar: true, setHash: false, center: true, tour: startTour });
+      }
+      if (startTour) {
+        openTour(0);
+      }
+    }
+    
+    window.addEventListener('hashchange', handleHash);
+    handleHash();
   </script>
 </body>
 </html>
@@ -1456,7 +1885,14 @@ class TemplateManager:
         output_path.write_text(html, encoding='utf-8')
         logger.info(f"Generated lineage page: {output_path}")
 
-    def render_interactive_graph(self, wf_name: str, svg_content: str, task_defs: str, output_path: Path):
+    def render_interactive_graph(
+        self,
+        wf_name: str,
+        svg_content: str,
+        task_defs: str,
+        output_path: Path,
+        summary: Optional[Dict[str, Any]] = None
+    ):
         """Render interactive workflow graph.
         
         Args:
@@ -1464,9 +1900,18 @@ class TemplateManager:
             svg_content: SVG content string
             task_defs: JSON string of task definitions
             output_path: Output file path
+            summary: Optional summary data for badges
         """
         template = self.get_template('interactive.html.j2')
-        html = template.render(wf_name=wf_name, svg_content=svg_content, task_defs=task_defs)
+        task_defs_json = task_defs
+        if not isinstance(task_defs, str):
+            task_defs_json = json.dumps(task_defs, ensure_ascii=True, default=str)
+        html = template.render(
+            wf_name=wf_name,
+            svg_content=svg_content,
+            task_defs=task_defs_json,
+            summary=summary
+        )
         output_path.write_text(html, encoding='utf-8')
         logger.info(f"Generated interactive graph: {output_path}")
 
@@ -1478,14 +1923,12 @@ DEFAULT_LINEAGE_TEMPLATE = """<!doctype html>
   <meta charset="utf-8">
   <title>Data Lineage - Digdag Graph</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --primary: #1a365d;
       --primary-light: #2c5282;
       --accent: #3182ce;
+      --font-sans: "Inter", "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
       --gray-50: #f7fafc;
       --gray-100: #edf2f7;
       --gray-200: #e2e8f0;
@@ -1525,8 +1968,8 @@ DEFAULT_LINEAGE_TEMPLATE = """<!doctype html>
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { 
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    body {
+      font-family: var(--font-sans);
       background: var(--bg-body); color: var(--text-main); font-size: 14px; line-height: 1.5;
       min-height: 100vh; display: flex; flex-direction: column;
       transition: background 0.3s ease, color 0.3s ease;
@@ -1572,7 +2015,7 @@ DEFAULT_LINEAGE_TEMPLATE = """<!doctype html>
     .controls { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
     input[type="search"], select {
       background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border-color);
-      border-radius: 6px; padding: 10px 14px; outline: none; font-family: 'Inter', sans-serif;
+      border-radius: 6px; padding: 10px 14px; outline: none; font-family: var(--font-sans);
       font-size: 14px; transition: all 0.2s;
     }
     input[type="search"] { flex: 1; min-width: 250px; }

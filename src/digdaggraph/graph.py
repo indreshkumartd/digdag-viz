@@ -78,6 +78,45 @@ NODE_PENWIDTHS = {
     "_export": "2.0",
 }
 
+SQL_FILE_EXTENSIONS = (".sql", ".sql.j2")
+
+
+def _looks_like_file_path(value: str) -> bool:
+    """Heuristic check for file-like query strings."""
+    if not value:
+        return False
+    if any(ch.isspace() for ch in value):
+        return False
+    lower = value.lower()
+    if lower.endswith(SQL_FILE_EXTENSIONS):
+        return True
+    return "/" in value or "\\" in value
+
+
+def _resolve_sql_path(
+    query_str: str,
+    workflow_dir: Path,
+    project_root: Optional[Path]
+) -> Tuple[Optional[Path], bool]:
+    """Resolve SQL path from workflow and project roots."""
+    raw_path = Path(query_str)
+    if raw_path.is_absolute():
+        return raw_path, True
+
+    roots = [workflow_dir]
+    if project_root and project_root not in roots:
+        roots.append(project_root)
+
+    for root in roots:
+        candidate = root / query_str
+        if candidate.exists():
+            return candidate, True
+
+    if _looks_like_file_path(query_str):
+        return roots[0] / query_str, True
+
+    return None, False
+
 
 def style_for(op: Optional[str], custom_colors: Optional[Dict[str, str]] = None) -> Tuple[str, str, str]:
     """Get shape, color, and penwidth for an operator.
@@ -488,38 +527,57 @@ def render_tasks_with_links(
                 # String: td>: queries/my_query.sql
                 # Dict: td>: {query: queries/my_query.sql, database: mydb}
                 query_str = None
+                inline_sql = None
                 if isinstance(query_val, str):
                     query_str = query_val
                 elif isinstance(query_val, dict):
-                    # Extract query from dict (could be 'query' or other keys)
-                    query_str = query_val.get('query') or query_val.get('sql')
-                
+                    query_str = query_val.get("query") or query_val.get("sql")
+                    inline_sql = query_val.get("data")
+
+                inline_sql_text = inline_sql if isinstance(inline_sql, str) else None
+
                 if query_str and isinstance(query_str, str):
-                    if query_str.endswith('.sql'):
-                        # File-based query
-                        sql_path = project_root / query_str if project_root else Path(query_str)
-                        if sql_path.exists():
-                            project_name = file_path.parent.name
-                            rel_path = read_and_generate_sql_page(sql_path, query_str, project_name, outdir)
-                            url = rel_path
-                            tooltip = f"View SQL: {query_str}"
-                    else:
-                        # Inline query
-                        # Create a safe filename for the inline query
-                        import hashlib
-                        query_hash = hashlib.md5(query_str.encode('utf-8')).hexdigest()[:8]
-                        inline_name = f"inline_{tname}_{query_hash}.sql"
-                        
-                        # Write inline SQL to temp file
-                        queries_dir = outdir / "queries"
-                        queries_dir.mkdir(parents=True, exist_ok=True)
-                        inline_sql_path = queries_dir / inline_name
-                        inline_sql_path.write_text(query_str, encoding='utf-8')
-                        
-                        project_name = file_path.parent.name
-                        rel_path = read_and_generate_sql_page(inline_sql_path, f"inline: {tname}", project_name, outdir)
+                    sql_path, is_file = _resolve_sql_path(
+                        query_str,
+                        file_path.parent,
+                        project_root
+                    )
+                    project_name = project_root.name if project_root else file_path.parent.name
+                    if is_file and sql_path:
+                        rel_path = read_and_generate_sql_page(
+                            sql_path,
+                            query_str,
+                            project_name,
+                            outdir
+                        )
                         url = rel_path
-                        tooltip = "View Inline SQL"
+                        tooltip = f"View SQL: {query_str}"
+                        inline_sql_text = None
+                    elif inline_sql_text is None:
+                        inline_sql_text = query_str
+
+                if inline_sql_text:
+                    # Inline query
+                    # Create a safe filename for the inline query
+                    import hashlib
+                    query_hash = hashlib.md5(inline_sql_text.encode('utf-8')).hexdigest()[:8]
+                    inline_name = f"inline_{tname}_{query_hash}.sql"
+                    
+                    # Write inline SQL to temp file
+                    queries_dir = outdir / "queries"
+                    queries_dir.mkdir(parents=True, exist_ok=True)
+                    inline_sql_path = queries_dir / inline_name
+                    inline_sql_path.write_text(inline_sql_text, encoding='utf-8')
+                    
+                    project_name = project_root.name if project_root else file_path.parent.name
+                    rel_path = read_and_generate_sql_page(
+                        inline_sql_path,
+                        f"inline: {tname}",
+                        project_name,
+                        outdir
+                    )
+                    url = rel_path
+                    tooltip = "View Inline SQL"
 
         # Check if this is a parallel group container
         is_parallel_group = False

@@ -272,7 +272,8 @@ class WorkflowLineageExtractor:
     def extract_from_workflow(
         self,
         workflow_doc,
-        base_path: Path
+        base_path: Path,
+        search_roots: Optional[List[Path]] = None
     ) -> List[TaskLineage]:
         """
         Extract lineage from a workflow document.
@@ -293,24 +294,26 @@ class WorkflowLineageExtractor:
         td_tasks = self._find_td_operators(workflow_doc.content, workflow_doc.name)
         
         # Extract lineage from each SQL file
-        for task_path, sql_file, task_def in td_tasks:
-            lineage = self._extract_from_sql_file(
-                sql_file,
+        for task_path, sql_value, task_def, is_inline in td_tasks:
+            lineage = self._extract_from_sql(
+                sql_value,
                 base_path,
                 context,
-                task_def  # Pass task definition to check for create_table
+                task_def,  # Pass task definition to check for create_table
+                search_roots=search_roots,
+                is_inline=is_inline
             )
             
             lineages.append(TaskLineage(
                 task_name=task_path,
                 workflow_name=workflow_doc.name,
-                sql_file=sql_file,
+                sql_file=None if is_inline else sql_value,
                 lineage=lineage
             ))
         
         return lineages
     
-    def _find_td_operators(self, obj, path="") -> List[Tuple[str, str, Dict]]:
+    def _find_td_operators(self, obj, path="") -> List[Tuple[str, str, Dict, bool]]:
         """
         Recursively find all td> operators in workflow structure.
         
@@ -319,21 +322,28 @@ class WorkflowLineageExtractor:
             path: Current path in the workflow tree
             
         Returns:
-            List of (task_path, sql_file, task_def) tuples
+            List of (task_path, sql_value, task_def, is_inline) tuples
         """
         results = []
         
         if isinstance(obj, dict):
             # Check if this dict has a td> key
             if 'td>' in obj:
-                sql_file = obj['td>']
+                sql_value = obj['td>']
                 # Handle both string and dict values
-                if isinstance(sql_file, str):
+                if isinstance(sql_value, str):
                     # Return the entire task definition
-                    results.append((path, sql_file, obj))
-                elif isinstance(sql_file, dict) and 'data' in sql_file:
-                    # Inline SQL - skip for now
-                    logger.debug(f"Skipping inline SQL at {path}")
+                    results.append((path, sql_value, obj, False))
+                elif isinstance(sql_value, dict):
+                    query_value = sql_value.get('query') or sql_value.get('sql')
+                    if isinstance(query_value, str):
+                        results.append((path, query_value, obj, False))
+                    else:
+                        inline_sql = sql_value.get('data')
+                        if isinstance(inline_sql, str):
+                            results.append((path, inline_sql, obj, True))
+                        else:
+                            logger.debug(f"Skipping unsupported td> value at {path}")
             
             # Recursively search all values
             for key, value in obj.items():
@@ -382,109 +392,164 @@ class WorkflowLineageExtractor:
         
         return context
     
-    def _extract_from_sql_file(
+    def _looks_like_file_path(self, value: str) -> bool:
+        """Heuristic check for file-like query strings."""
+        if not value:
+            return False
+        if any(ch.isspace() for ch in value):
+            return False
+        lower = value.lower()
+        if lower.endswith(".sql") or lower.endswith(".sql.j2"):
+            return True
+        return "/" in value or "\\" in value
+
+    def _resolve_sql_path(
         self,
-        sql_file: str,
+        sql_value: str,
+        base_path: Path,
+        search_roots: Optional[List[Path]] = None
+    ) -> Tuple[Optional[Path], bool]:
+        """Resolve SQL path from workflow and project roots."""
+        raw_path = Path(sql_value)
+        if raw_path.is_absolute():
+            return raw_path, True
+
+        roots = [base_path]
+        for root in search_roots or []:
+            if root and root not in roots:
+                roots.append(root)
+
+        for root in roots:
+            candidate = root / sql_value
+            if candidate.exists():
+                return candidate, True
+
+        if self._looks_like_file_path(sql_value):
+            return roots[0] / sql_value, True
+
+        return None, False
+
+    def _extract_from_sql_text(self, sql_template: str, context: Dict) -> SQLLineage:
+        """Extract lineage from SQL text, resolving templates when possible."""
+        has_templates = '{{' in sql_template or '{%' in sql_template
+
+        if has_templates:
+            # Try to resolve templates
+            resolved_sql, success = self.template_resolver.resolve(
+                sql_template,
+                context
+            )
+
+            if success:
+                return self.sql_parser.extract_tables(resolved_sql)
+
+            # Extract template variables
+            variables = self.template_resolver.extract_variables(sql_template)
+            return SQLLineage(
+                resolved=False,
+                template_variables=variables
+            )
+
+        return self.sql_parser.extract_tables(sql_template)
+
+    def _apply_task_overrides(self, lineage: SQLLineage, task_def: Optional[Dict]) -> SQLLineage:
+        """Apply Digdag task parameters like database/create_table/insert_into."""
+        if not task_def:
+            return lineage
+
+        # Apply task database context to unqualified source tables
+        task_db = task_def.get('database')
+        if task_db:
+            for i, source in enumerate(lineage.sources):
+                if not source.database:
+                    lineage.sources[i] = TableReference(
+                        name=source.name,
+                        database=task_db,
+                        schema=source.schema
+                    )
+
+        # Override target table with Digdag parameters if present
+        if lineage.resolved:
+            # Check for create_table parameter (creates a new table)
+            if 'create_table' in task_def:
+                table_name = task_def['create_table']
+                # Parse database if specified
+                database = task_def.get('database')
+
+                # If table name is already fully qualified, use it as is
+                if '.' in table_name:
+                    # Update database and table_name from the fully qualified name
+                    parts = table_name.split('.')
+                    if len(parts) > 1:
+                        database = parts[0]
+                        table_name = '.'.join(parts[1:])
+
+                # Replace targets with the create_table value
+                lineage.targets = [TableReference(
+                    name=table_name,
+                    database=database
+                )]
+
+            # Check for insert_into parameter (inserts into existing table)
+            elif 'insert_into' in task_def:
+                table_name = task_def['insert_into']
+                database = task_def.get('database')
+
+                # If table name is already fully qualified, use it as is
+                if '.' in table_name:
+                    # Update database and table_name from the fully qualified name
+                    parts = table_name.split('.')
+                    if len(parts) > 1:
+                        database = parts[0]
+                        table_name = '.'.join(parts[1:])
+
+                # Replace targets with the insert_into value
+                lineage.targets = [TableReference(
+                    name=table_name,
+                    database=database
+                )]
+
+        return lineage
+
+    def _extract_from_sql(
+        self,
+        sql_value: str,
         base_path: Path,
         context: Dict,
-        task_def: Optional[Dict] = None
+        task_def: Optional[Dict] = None,
+        search_roots: Optional[List[Path]] = None,
+        is_inline: bool = False
     ) -> SQLLineage:
-        """Extract lineage from a SQL file"""
+        """Extract lineage from SQL file or inline SQL."""
         try:
-            # Resolve SQL file path
-            sql_path = base_path / sql_file
-            
-            if not sql_path.exists():
+            if not isinstance(sql_value, str) or not sql_value.strip():
                 return SQLLineage(
                     resolved=False,
-                    error=f"SQL file not found: {sql_file}"
+                    error="SQL value is empty"
                 )
-            
-            # Read SQL file
-            with open(sql_path, 'r') as f:
-                sql_template = f.read()
-            
-            # Check for templates
-            has_templates = '{{' in sql_template or '{%' in sql_template
-            
-            if has_templates:
-                # Try to resolve templates
-                resolved_sql, success = self.template_resolver.resolve(
-                    sql_template,
-                    context
-                )
-                
-                if success:
-                    # Parse resolved SQL
-                    lineage = self.sql_parser.extract_tables(resolved_sql)
-                else:
-                    # Extract template variables
-                    variables = self.template_resolver.extract_variables(sql_template)
-                    lineage = SQLLineage(
-                        resolved=False,
-                        template_variables=variables
-                    )
-            else:
-                # Parse SQL directly
-                lineage = self.sql_parser.extract_tables(sql_template)
-            
-            
-            # Apply task database context to unqualified source tables
-            task_db = task_def.get('database') if task_def else None
-            if task_db:
-                for i, source in enumerate(lineage.sources):
-                    if not source.database:
-                        lineage.sources[i] = TableReference(
-                            name=source.name,
-                            database=task_db,
-                            schema=source.schema
-                        )
 
-            # Override target table with Digdag parameters if present
-            if task_def and lineage.resolved:
-                # Check for create_table parameter (creates a new table)
-                if 'create_table' in task_def:
-                    table_name = task_def['create_table']
-                    # Parse database if specified
-                    database = task_def.get('database')
-                    
-                    # If table name is already fully qualified, use it as is
-                    if '.' in table_name:
-                        # Update database and table_name from the fully qualified name
-                        parts = table_name.split('.')
-                        if len(parts) > 1:
-                            database = parts[0]
-                            table_name = '.'.join(parts[1:])
-                    
-                    # Replace targets with the create_table value
-                    lineage.targets = [TableReference(
-                        name=table_name,
-                        database=database
-                    )]
-                
-                # Check for insert_into parameter (inserts into existing table)
-                elif 'insert_into' in task_def:
-                    table_name = task_def['insert_into']
-                    database = task_def.get('database')
-                    
-                    # If table name is already fully qualified, use it as is
-                    if '.' in table_name:
-                        # Update database and table_name from the fully qualified name
-                        parts = table_name.split('.')
-                        if len(parts) > 1:
-                            database = parts[0]
-                            table_name = '.'.join(parts[1:])
-                    
-                    # Replace targets with the insert_into value
-                    lineage.targets = [TableReference(
-                        name=table_name,
-                        database=database
-                    )]
-            
-            return lineage
+            if is_inline:
+                lineage = self._extract_from_sql_text(sql_value, context)
+                return self._apply_task_overrides(lineage, task_def)
+
+            sql_path, is_file = self._resolve_sql_path(sql_value, base_path, search_roots)
+            if is_file and sql_path:
+                if not sql_path.exists():
+                    return SQLLineage(
+                        resolved=False,
+                        error=f"SQL file not found: {sql_value}"
+                    )
+
+                sql_template = sql_path.read_text(encoding="utf-8")
+                lineage = self._extract_from_sql_text(sql_template, context)
+                return self._apply_task_overrides(lineage, task_def)
+
+            # Treat remaining strings as inline SQL
+            lineage = self._extract_from_sql_text(sql_value, context)
+            return self._apply_task_overrides(lineage, task_def)
         
         except Exception as e:
-            logger.warning(f"Failed to extract lineage from {sql_file}: {e}")
+            logger.warning(f"Failed to extract lineage from {sql_value}: {e}")
             return SQLLineage(
                 resolved=False,
                 error=str(e)
@@ -748,15 +813,13 @@ class LineageGraph:
   <meta charset="utf-8">
   <title>{'Lineage: ' + table_name if table_name else 'Full Data Lineage'} - Digdag Graph</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {{
       --primary: #1a365d;
       --primary-light: #2c5282;
       --accent: #3182ce;
       --success: #38a169;
+      --font-sans: "Inter", "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
       --gray-50: #f7fafc;
       --gray-100: #edf2f7;
       --gray-200: #e2e8f0;
@@ -799,7 +862,7 @@ class LineageGraph:
 
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: var(--font-sans);
       background: var(--bg-body); color: var(--text-main); font-size: 14px; line-height: 1.5;
       min-height: 100vh; display: flex; flex-direction: column;
       transition: background 0.3s ease, color 0.3s ease;
@@ -1312,7 +1375,7 @@ document.addEventListener('DOMContentLoaded', function() {
   searchInput.style.cssText = `
     position: fixed; top: 80px; right: 350px; z-index: 1001;
     padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px;
-    font-family: 'Inter', sans-serif; font-size: 14px;
+    font-family: var(--font-sans); font-size: 14px;
     background: var(--bg-card); color: var(--text-main);
     box-shadow: 0 4px 6px -1px var(--shadow-color);
     width: 250px;
@@ -1323,7 +1386,7 @@ document.addEventListener('DOMContentLoaded', function() {
   dbFilter.style.cssText = `
     position: fixed; top: 80px; right: 40px; z-index: 1001;
     padding: 10px 14px; border: 1px solid var(--border-color); border-radius: 6px;
-    font-family: 'Inter', sans-serif; font-size: 14px;
+    font-family: var(--font-sans); font-size: 14px;
     background: var(--bg-card); color: var(--text-main);
     box-shadow: 0 4px 6px -1px var(--shadow-color);
     width: 280px; cursor: pointer;

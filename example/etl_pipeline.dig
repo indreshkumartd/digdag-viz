@@ -11,27 +11,41 @@ _schedule:
   create_table: src_raw.events
 
 +extract_users:
-  td>: queries/extract_users.sql
+  td>:
+    query: queries/extract_users.sql
   database: analytics
   create_table: src_raw.users
 
-+stage_events:
-  td>: queries/stage_events.sql
-  database: analytics
-  create_table: staging.events_cleaned
-
-+stage_users:
-  td>: queries/stage_users.sql
-  database: analytics  
-  create_table: staging.users_enriched
++stage_all:
+  _parallel: true
+  +stage_events:
+    td>: queries/stage_events.sql
+    database: analytics
+    create_table: staging.events_cleaned
+  +stage_users:
+    td>: queries/stage_users.sql
+    database: analytics
+    create_table: staging.users_enriched
 
 +create_golden_table:
   td>: queries/create_user_activity.sql
   database: analytics
   create_table: golden.user_activity_daily
 
++data_quality_check:
+  td>:
+    data: |
+      SELECT COUNT(*) AS total_users
+      FROM golden.user_activity_daily
+  database: analytics
+  insert_into: staging.quality_checks
+
 +export_to_s3:
   sh>: scripts/export_data.sh
+  retry: 3
+  _error:
+    +notify_export_failure:
+      echo>: "Export failed, check logs"
 
 +send_success_notification:
-  echo>: "ETL pipeline completed successfully at ${session_time}"
+  http_call>: https://example.com/webhook?workflow=etl_pipeline&status=success

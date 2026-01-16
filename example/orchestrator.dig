@@ -1,0 +1,27 @@
+# Orchestrator - Scheduled weekly
+# Demonstrates: call>, require>, if> branches
+
+_schedule:
+  cron: "0 6 * * 1"
+  timezone: UTC
+
++check_prereqs:
+  require>: hourly_sync
+
++run_etl:
+  call>: etl_pipeline
+
++run_adhoc_if_needed:
+  if>: ${run_adhoc}
+  _do:
+    +call_adhoc:
+      call>: adhoc_analysis
+  _else_do:
+    +skip_adhoc:
+      echo>: "Adhoc run skipped"
+
++post_run:
+  sh>: scripts/post_run.sh
+  _error:
+    +notify_failure:
+      echo>: "Orchestration failed"

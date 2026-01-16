@@ -42,6 +42,7 @@ That's it! You'll see an interactive dashboard with all your workflows.
 - Click any task to see details: SQL queries, parameters, schedules
 - Hover to highlight dependencies (upstream/downstream)
 - Search and filter tasks
+- Deep links to focused nodes (Copy Link) and a guided tour (beta)
 
 ### 📅 Schedule Overview
 - All scheduled workflows in one table
@@ -49,9 +50,17 @@ That's it! You'll see an interactive dashboard with all your workflows.
 - See cron schedules and timezones at a glance
 
 ### 🔗 SQL Query Viewer
-- Syntax-highlighted SQL with proper formatting
+- Syntax-highlighted SQL with proper formatting (offline-friendly)
 - Direct links from workflow tasks to query files
 - "Back to workflow" navigation
+
+### 🧠 AI Context Pack
+- **context.json** for tooling and programmatic use
+- **context.toon** for LLM-friendly ingestion (token-efficient, tabular)
+- Includes workflows, schedules, lineage tables, SQL paths, and unresolved template warnings
+
+### 📴 Offline-Ready
+- All HTML artifacts are self-contained (no external assets)
 
 ### 📁 Project Organization
 - Supports single projects or workspace with multiple projects
@@ -334,6 +343,8 @@ your-project/
     ├── unscheduled_workflows.html
     ├── daily_import.html   # Interactive graph
     ├── weekly_report.html
+    ├── context.json        # AI context pack (JSON)
+    ├── context.toon        # AI context pack (TOON)
     └── queries/            # SQL viewers
         ├── import.html
         └── report.html
@@ -363,4 +374,4 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
 - Original inspiration: [y-abe/digdag-graph](https://github.com/y-abe/digdag-graph)
 - Built for [Treasure Data](https://www.treasuredata.com/) customers
-- Powered by [Graphviz](https://graphviz.org/) and [Panzoom](https://github.com/timmywil/panzoom)
+- Powered by [Graphviz](https://graphviz.org/) and vanilla JS for interaction

@@ -18,26 +18,36 @@ open example-output/index.html
 
 1. **`etl_pipeline.dig`** - Scheduled Daily ETL Pipeline
    - **Schedule**: Daily at 2 AM PST
-   - **Demonstrates**: Complete data pipeline with lineage
-   - **Operators**: `td>`, `sh>`, `echo>`
+   - **Demonstrates**: Complete data pipeline with lineage, retries, error handling
+   - **Operators**: `td>`, `sh>`, `echo>`, `http_call>`
    - **Data Flow**: Source → Staging → Golden
    
 2. **`adhoc_analysis.dig`** - Unscheduled Analysis Workflow
    - **Schedule**: None (manual execution)
-   - **Demonstrates**: Parallel execution, Python operators
-   - **Operators**: `td>`, `py>`, `sh>`, `echo>`
-   - **Features**: Parallel task execution
+   - **Demonstrates**: Parallel execution, branching, Ruby and Python operators
+   - **Operators**: `td>`, `py>`, `rb>`, `sh>`, `echo>`, `for_each>`, `if>`
+   - **Features**: Parallel task execution, conditional publish
    
 3. **`hourly_sync.dig`** - High-Frequency Data Sync
    - **Schedule**: Hourly
-   - **Demonstrates**: Frequent updates, INSERT INTO
-   - **Operators**: `td>`, `echo>`
-   - **Pattern**: Incremental data loading
+   - **Demonstrates**: Frequent updates, retries, loops
+   - **Operators**: `td>`, `sh>`, `echo>`, `loop>`, `http_call>`
+   - **Pattern**: Incremental data loading with polling
 
 4. **`daily_processing.dig`** - Simple ETL (Original Example)
    - **Schedule**: Daily at 2 AM UTC
-   - **Demonstrates**: Basic workflow structure
-   - **Operators**: `td>`, `sh>`, `echo>`
+   - **Demonstrates**: Basic workflow structure with branching
+   - **Operators**: `td>`, `sh>`, `echo>`, `if>`
+
+5. **`orchestrator.dig`** - Weekly Orchestration
+   - **Schedule**: Weekly (Mondays)
+   - **Demonstrates**: Cross-workflow orchestration
+   - **Operators**: `call>`, `require>`, `if>`, `sh>`, `echo>`
+
+6. **`backfill_outliers.dig`** - Outliers and Backfills
+   - **Schedule**: None (manual execution)
+   - **Demonstrates**: `for_range>`, `for_each>`, inline SQL, `!include`
+   - **Operators**: `td>`, `sh>`, `echo>`, `http_call>`, `for_range>`, `for_each>`
 
 ### Data Lineage
 
@@ -53,10 +63,13 @@ Staging Layer (staging)
   ├── events_cleaned
   ├── users_enriched
   ├── clickstream_aggregated
+  ├── region_counts
+  ├── backfill_partitions
   └── analysis_prep
        ↓
 Golden Layer (golden)
   ├── user_activity_daily
+  ├── segment_summary
   └── analysis_results
 ```
 
@@ -74,10 +87,12 @@ All SQL files are in the `queries/` directory:
 - `stage_users.sql` - Enrich user data
 - `update_staging_clickstream.sql` - Aggregate clickstream
 - `prepare_analysis.sql` - Prepare analysis data
+- `backfill_partition.sql` - Backfill partitions
 
 **Golden Tables:**
 - `create_user_activity.sql` - Create user activity summary
 - `consolidate.sql` - Consolidate analysis results
+- `segment_analysis.sql` - Segment rollups
 
 **Legacy:**
 - `extract.sql` - Original extract query
@@ -89,15 +104,19 @@ Running `digdag-viz example` will generate:
 
 ### Main Pages
 - **`index.html`** - Dashboard with all workflows
-- **`scheduled_workflows.html`** - Scheduled workflows (3 workflows)
-- **`unscheduled_workflows.html`** - Unscheduled workflows (1 workflow)
-- **`lineage.html`** - Data lineage overview (9 tables)
+- **`scheduled_workflows.html`** - Scheduled workflows (4 workflows)
+- **`unscheduled_workflows.html`** - Unscheduled workflows (2 workflows)
+- **`lineage.html`** - Data lineage overview
+- **`context.json`** - AI context pack (JSON)
+- **`context.toon`** - AI context pack (TOON)
 
 ### Workflow Graphs
 - `etl_pipeline.html` - Interactive ETL pipeline graph
 - `adhoc_analysis.html` - Analysis workflow with parallel tasks
 - `hourly_sync.html` - Hourly sync workflow
 - `daily_processing.html` - Simple ETL workflow
+- `orchestrator.html` - Cross-workflow orchestration
+- `backfill_outliers.html` - Backfills and outliers
 
 ### Lineage Graphs
 - `lineage/full_lineage.html` - Complete data flow visualization
@@ -139,7 +158,7 @@ Running `digdag-viz example` will generate:
 ## 📊 Lineage Visualization Features
 
 ### Full Lineage Graph
-- **107 tables** across all layers
+- Multiple tables across all layers
 - **Database filter dropdown** - Filter by `src_raw`, `staging`, or `golden`
 - **Search box** - Find tables by name
 - **Hover highlighting** - See upstream (red) and downstream (cyan) dependencies
@@ -160,7 +179,15 @@ Running `digdag-viz example` will generate:
 | `td>` | Extract, transform, load | Treasure Data SQL queries |
 | `sh>` | Export scripts | Shell commands |
 | `py>` | Analysis scripts | Python functions |
+| `rb>` | Cleanup scripts | Ruby scripts |
 | `echo>` | Notifications | Simple messages |
+| `call>` | Orchestration | Call workflows |
+| `require>` | Dependencies | Require workflows |
+| `for_each>` | Fan-out | Region or segment loops |
+| `for_range>` | Backfills | Numeric loops |
+| `if>` | Branching | Conditional steps |
+| `loop>` | Polling | Loop with backoff |
+| `http_call>` | Webhooks | HTTP notifications |
 
 ## 🔄 Workflow Patterns
 

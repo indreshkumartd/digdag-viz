@@ -1,0 +1,37 @@
+# Backfill and Outliers - Unscheduled
+# Demonstrates: for_range>, for_each>, inline SQL, _error, retry, !include
+
+_export: !include includes/export.yml
+
++backfill_range:
+  for_range>:
+    start: 1
+    end: 3
+  _do:
+    +backfill_partition:
+      td>:
+        query: queries/backfill_partition.sql
+      database: analytics
+      create_table: staging.backfill_partition_${i}
+
++fanout_regions:
+  for_each>:
+    region: [us, eu, apac]
+  _do:
+    +region_sync:
+      td>:
+        data: |
+          SELECT '${region}' AS region, COUNT(*) AS total
+          FROM src_raw.events
+      database: analytics
+      insert_into: staging.region_counts
+
++notify_ops:
+  http_call>: https://example.com/ops?status=complete
+
++cleanup_temp:
+  sh>: scripts/cleanup_temp.sh
+  retry: 1
+  _error:
+    +cleanup_error:
+      echo>: "Cleanup failed"

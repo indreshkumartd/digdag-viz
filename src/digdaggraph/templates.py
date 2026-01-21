@@ -133,15 +133,22 @@ DEFAULT_SCHEDULE_TEMPLATE = """<!doctype html>
   tbody td { padding: 14px 16px; border-bottom: 1px solid var(--border-color); vertical-align: top; }
   tbody tr:last-child td { border-bottom: none; }
   
-  code { 
+  code {
     background: var(--gray-100); padding: 3px 8px; border-radius: 4px;
     font-family: 'SF Mono', Monaco, monospace; font-size: 13px;
     color: var(--text-main); display: inline-block;
   }
-  
+
   .c-project { width: 18%; font-weight: 500; color: var(--text-main); }
   .c-workflow { width: 25%; }
   .c-schedule { width: 57%; }
+  .human-schedule {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+  }
   .badge { 
     background: var(--accent); color: white; border-radius: 999px;
     padding: 4px 12px; font-size: 12px; font-weight: 500;
@@ -207,7 +214,10 @@ DEFAULT_SCHEDULE_TEMPLATE = """<!doctype html>
       <tr data-project="{{ it.project }}">
         <td class="c-project">{{ it.project }}</td>
         <td class="c-workflow"><a href="{{ it.svg }}">{{ it.workflow }}</a></td>
-        <td class="c-schedule"><code>{{ it.schedule }}{% if it.timezone %} ({{ it.timezone }}){% endif %}</code></td>
+        <td class="c-schedule">
+          <code>{{ it.schedule }}{% if it.timezone %} ({{ it.timezone }}){% endif %}</code>
+          {% if it.human_schedule %}<div class="human-schedule">{{ it.human_schedule }}</div>{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

@@ -753,7 +753,7 @@ def main(argv=None):
                     'name': wf_name,
                     'file': rel_path,
                     'schedule': cron,
-                    'timezone': tz,
+                    'human_schedule': _cron_to_human(cron) if cron else None,
                     'timezone': tz,
                     'graph': html_filename,  # Link to interactive HTML
                     'project': project_name,  # Add project name for filtering

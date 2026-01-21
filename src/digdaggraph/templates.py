@@ -438,6 +438,13 @@ DEFAULT_INDEX_TEMPLATE = """<!doctype html>
       padding: 4px 10px; border-radius: 4px; font-size: 12px;
       font-weight: 500; margin-top: 8px;
     }
+    .human-schedule {
+      display: block;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-style: italic;
+    }
     .badge-row {
       display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
     }
@@ -527,7 +534,8 @@ DEFAULT_INDEX_TEMPLATE = """<!doctype html>
         <h3>{{ wf.name }}</h3>
         <p><code>{{ wf.file }}</code></p>
         {% if wf.schedule %}
-        <p>Schedule: <code>{{ wf.schedule }}</code></p>
+        <p>Schedule: <code>{{ wf.schedule }}</code>
+        {% if wf.human_schedule %}<span class="human-schedule">{{ wf.human_schedule }}</span>{% endif %}</p>
         <span class="schedule-badge">Scheduled</span>
         {% endif %}
         {% if wf.summary %}

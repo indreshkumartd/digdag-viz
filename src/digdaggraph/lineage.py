@@ -213,34 +213,58 @@ class SQLParser:
 
 
 class TemplateResolver:
-    """Resolve Jinja templates in SQL queries"""
-    
+    """Resolve Jinja templates and Digdag variables in SQL queries"""
+
     def __init__(self):
+        # Standard Jinja2 environment for {{var}} syntax
         self.env = Environment()
+        # Digdag-style environment for ${var} syntax
+        self.env_digdag = Environment(
+            variable_start_string='${',
+            variable_end_string='}'
+        )
     
     def resolve(self, sql_template: str, context: Dict) -> Tuple[str, bool]:
         """
-        Resolve Jinja template with given context.
-        
+        Resolve Jinja2/Digdag templates with given context.
+
+        Tries both Digdag-style ${var} and Jinja2-style {{var}} patterns.
+
         Args:
-            sql_template: SQL with Jinja templates
+            sql_template: SQL with templates (${var} or {{var}})
             context: Variable context from workflow
-            
+
         Returns:
             Tuple of (resolved_sql, success)
         """
-        try:
-            template = self.env.from_string(sql_template)
-            resolved = template.render(**context)
-            return resolved, True
-        
-        except UndefinedError as e:
-            logger.debug(f"Template resolution failed - undefined variable: {e}")
-            return sql_template, False
-        
-        except Exception as e:
-            logger.debug(f"Template resolution failed: {e}")
-            return sql_template, False
+        # Try Digdag-style ${var} first (more common in TD)
+        if '${' in sql_template:
+            try:
+                template = self.env_digdag.from_string(sql_template)
+                resolved = template.render(**context)
+                return resolved, True
+            except UndefinedError as e:
+                logger.debug(f"Digdag template resolution failed - undefined variable: {e}")
+                return sql_template, False
+            except Exception as e:
+                logger.debug(f"Digdag template resolution failed: {e}")
+                # Fall through to try Jinja2 style
+
+        # Try standard Jinja2 {{var}} style
+        if '{{' in sql_template:
+            try:
+                template = self.env.from_string(sql_template)
+                resolved = template.render(**context)
+                return resolved, True
+            except UndefinedError as e:
+                logger.debug(f"Jinja2 template resolution failed - undefined variable: {e}")
+                return sql_template, False
+            except Exception as e:
+                logger.debug(f"Jinja2 template resolution failed: {e}")
+                return sql_template, False
+
+        # No templates found
+        return sql_template, True
     
     def extract_variables(self, sql_template: str) -> List[str]:
         """
@@ -277,18 +301,19 @@ class WorkflowLineageExtractor:
     ) -> List[TaskLineage]:
         """
         Extract lineage from a workflow document.
-        
+
         Args:
             workflow_doc: WorkflowDocument object
             base_path: Base path for resolving SQL file paths
-            
+            search_roots: List of project root paths for searching config files
+
         Returns:
             List of TaskLineage objects
         """
         lineages = []
-        
-        # Build variable context from workflow
-        context = self._build_context(workflow_doc)
+
+        # Build variable context from workflow and project config files
+        context = self._build_context(workflow_doc, base_path)
         
         # Recursively find all td> operators in the workflow
         td_tasks = self._find_td_operators(workflow_doc.content, workflow_doc.name)
@@ -372,24 +397,69 @@ class WorkflowLineageExtractor:
         
         return results
     
-    def _build_context(self, workflow_doc) -> Dict:
-        """Build variable context from workflow definition"""
+    def _build_context(self, workflow_doc, base_path: Path) -> Dict:
+        """
+        Build variable context from workflow definition and project config files.
+
+        This loads ALL YAML config files from the project to resolve template variables
+        in SQL queries, making lineage cleaner by showing actual database/table names.
+        """
         context = {}
-        
-        # From _export section
+
+        # Step 1: Load project-level config files from config/ directory
+        config_dir = base_path / 'config'
+        if config_dir.exists() and config_dir.is_dir():
+            for yaml_file in config_dir.glob('*.yml'):
+                try:
+                    with open(yaml_file, 'r', encoding='utf-8') as f:
+                        config_data = yaml.safe_load(f)
+                        if config_data and isinstance(config_data, dict):
+                            # Merge top-level key-value pairs (only simple types)
+                            for key, value in config_data.items():
+                                # Ensure both key and value are simple types for Jinja2
+                                if isinstance(key, str) and isinstance(value, (str, int, float, bool)):
+                                    context[key] = value
+                            logger.debug(f"Loaded context from {yaml_file.name}: {list(config_data.keys())}")
+                except Exception as e:
+                    logger.debug(f"Failed to load config {yaml_file.name}: {e}")
+
+        # Step 2: Also check for config files in base_path itself (some projects don't use config/ subdir)
+        if base_path.is_dir():
+            for yaml_file in base_path.glob('*.yml'):
+                if yaml_file.name.endswith('.dig'):
+                    continue  # Skip workflow files
+                try:
+                    with open(yaml_file, 'r', encoding='utf-8') as f:
+                        config_data = yaml.safe_load(f)
+                        if config_data and isinstance(config_data, dict):
+                            for key, value in config_data.items():
+                                # Ensure both key and value are simple types for Jinja2
+                                if isinstance(key, str) and isinstance(value, (str, int, float, bool)):
+                                    context[key] = value
+                except Exception as e:
+                    logger.debug(f"Failed to load config {yaml_file.name}: {e}")
+
+        # Step 3: From _export section of the workflow (highest priority - overrides config files)
         if hasattr(workflow_doc, 'content') and '_export' in workflow_doc.content:
             export_vars = workflow_doc.content['_export']
             if isinstance(export_vars, dict):
-                context.update(export_vars)
-        
-        # Add common Digdag variables as placeholders
+                # Extract simple key-value pairs from _export
+                for key, value in export_vars.items():
+                    # Ensure key is string and value is simple type
+                    if isinstance(key, str) and isinstance(value, (str, int, float, bool)):
+                        context[key] = value
+
+        # Step 4: Add common Digdag session variables with current date
+        from datetime import datetime
+        current_date = datetime.now()
         context.update({
-            'session_date': '2024-01-01',
-            'session_time': '00:00:00',
+            'session_date': current_date.strftime('%Y-%m-%d'),
+            'session_time': current_date.strftime('%H:%M:%S'),
             'session_uuid': 'placeholder',
-            'session_date_hour': 0,
+            'session_date_hour': current_date.hour,
         })
-        
+
+        logger.debug(f"Built context with {len(context)} variables for {getattr(workflow_doc, 'name', 'workflow')}")
         return context
     
     def _looks_like_file_path(self, value: str) -> bool:
@@ -431,7 +501,8 @@ class WorkflowLineageExtractor:
 
     def _extract_from_sql_text(self, sql_template: str, context: Dict) -> SQLLineage:
         """Extract lineage from SQL text, resolving templates when possible."""
-        has_templates = '{{' in sql_template or '{%' in sql_template
+        # Check for both Jinja2 {{var}} and Digdag ${var} templates
+        has_templates = '{{' in sql_template or '{%' in sql_template or '${' in sql_template
 
         if has_templates:
             # Try to resolve templates
@@ -452,14 +523,36 @@ class WorkflowLineageExtractor:
 
         return self.sql_parser.extract_tables(sql_template)
 
-    def _apply_task_overrides(self, lineage: SQLLineage, task_def: Optional[Dict]) -> SQLLineage:
-        """Apply Digdag task parameters like database/create_table/insert_into."""
+    def _apply_task_overrides(self, lineage: SQLLineage, task_def: Optional[Dict], context: Optional[Dict] = None) -> SQLLineage:
+        """
+        Apply Digdag task parameters like database/create_table/insert_into.
+
+        Resolves template variables in task parameters using the provided context.
+        """
         if not task_def:
             return lineage
 
+        if context is None:
+            context = {}
+
+        # Helper function to resolve template variables in task parameter values
+        def resolve_param(value: str) -> str:
+            """Resolve template variables in a task parameter value."""
+            if not value or not isinstance(value, str):
+                return value
+
+            # Only try to resolve if there are template variables
+            if '${' in value or '{{' in value:
+                resolved, success = self.template_resolver.resolve(value, context)
+                return resolved if success else value
+
+            return value
+
         # Apply task database context to unqualified source tables
         task_db = task_def.get('database')
+        # Resolve variables in database parameter
         if task_db:
+            task_db = resolve_param(task_db)
             for i, source in enumerate(lineage.sources):
                 if not source.database:
                     lineage.sources[i] = TableReference(
@@ -472,9 +565,9 @@ class WorkflowLineageExtractor:
         if lineage.resolved:
             # Check for create_table parameter (creates a new table)
             if 'create_table' in task_def:
-                table_name = task_def['create_table']
+                table_name = resolve_param(task_def['create_table'])
                 # Parse database if specified
-                database = task_def.get('database')
+                database = resolve_param(task_def.get('database')) if task_def.get('database') else None
 
                 # If table name is already fully qualified, use it as is
                 if '.' in table_name:
@@ -492,8 +585,8 @@ class WorkflowLineageExtractor:
 
             # Check for insert_into parameter (inserts into existing table)
             elif 'insert_into' in task_def:
-                table_name = task_def['insert_into']
-                database = task_def.get('database')
+                table_name = resolve_param(task_def['insert_into'])
+                database = resolve_param(task_def.get('database')) if task_def.get('database') else None
 
                 # If table name is already fully qualified, use it as is
                 if '.' in table_name:
@@ -530,7 +623,7 @@ class WorkflowLineageExtractor:
 
             if is_inline:
                 lineage = self._extract_from_sql_text(sql_value, context)
-                return self._apply_task_overrides(lineage, task_def)
+                return self._apply_task_overrides(lineage, task_def, context)
 
             sql_path, is_file = self._resolve_sql_path(sql_value, base_path, search_roots)
             if is_file and sql_path:
@@ -542,11 +635,11 @@ class WorkflowLineageExtractor:
 
                 sql_template = sql_path.read_text(encoding="utf-8")
                 lineage = self._extract_from_sql_text(sql_template, context)
-                return self._apply_task_overrides(lineage, task_def)
+                return self._apply_task_overrides(lineage, task_def, context)
 
             # Treat remaining strings as inline SQL
             lineage = self._extract_from_sql_text(sql_value, context)
-            return self._apply_task_overrides(lineage, task_def)
+            return self._apply_task_overrides(lineage, task_def, context)
         
         except Exception as e:
             logger.warning(f"Failed to extract lineage from {sql_value}: {e}")
@@ -557,6 +650,243 @@ class WorkflowLineageExtractor:
 
 
 from dataclasses import dataclass, field
+import yaml
+
+
+class EnrichmentLineageExtractor:
+    """
+    Extracts lineage from TD enrichment YAML configurations.
+
+    TD uses dynamic code generation for enriching staging tables with canonical IDs.
+    These enrichments are configured via YAML files (enrich.yml, stage_enrich.yml)
+    rather than physical SQL files, so we need to infer the lineage relationships.
+
+    Pattern:
+      Source: ${src_db}.{table_name}  (e.g., mk_stg.adobe_clickstream)
+      Lookup: ${unif_db}.{canonical_id}_lookup  (e.g., cdp_unification_mk.crafter_id_lookup)
+      Target: ${unif_db}.enrich_{table_name}  (e.g., cdp_unification_mk.enrich_adobe_clickstream)
+    """
+
+    def extract_from_directory(self, workflow_dir: Path, docs: List[Tuple[Path, Dict]]) -> List[TaskLineage]:
+        """
+        Extract enrichment lineages from all enrichment YAML files in the workflow directory.
+
+        Args:
+            workflow_dir: Root directory containing workflows
+            docs: List of (file_path, parsed_yaml) tuples from workflow files
+
+        Returns:
+            List of synthetic TaskLineage objects representing enrichment dependencies
+        """
+        enrichment_lineages = []
+
+        # Find all enrichment YAML config files
+        yaml_patterns = ['**/enrich.yml', '**/stage_enrich.yml', '**/config/enrich*.yml']
+        yaml_files = []
+        for pattern in yaml_patterns:
+            yaml_files.extend(workflow_dir.glob(pattern))
+
+        logger.debug(f"Found {len(yaml_files)} enrichment YAML files")
+
+        for yaml_path in yaml_files:
+            try:
+                lineages = self._parse_enrichment_yaml(yaml_path, workflow_dir, docs)
+                enrichment_lineages.extend(lineages)
+                if lineages:
+                    logger.info(f"Extracted {len(lineages)} enrichment lineages from {yaml_path.name}")
+            except Exception as e:
+                logger.debug(f"Failed to parse enrichment config {yaml_path}: {e}")
+
+        return enrichment_lineages
+
+    def _parse_enrichment_yaml(self, yaml_path: Path, workflow_dir: Path, docs: List[Tuple[Path, Dict]]) -> List[TaskLineage]:
+        """Parse a single enrichment YAML file and create synthetic lineages."""
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+
+        if not config or 'tables' not in config:
+            return []
+
+        # Get variable context by finding the parent workflow that includes this YAML
+        context = self._resolve_enrichment_context(yaml_path, workflow_dir, docs)
+
+        lineages = []
+        for table_entry in config['tables']:
+            lineage = self._create_enrichment_lineage(table_entry, context, yaml_path)
+            if lineage:
+                lineages.append(lineage)
+
+        return lineages
+
+    def _resolve_enrichment_context(self, yaml_path: Path, workflow_dir: Path, docs: List[Tuple[Path, Dict]]) -> Dict:
+        """
+        Resolve variables for enrichment YAML by loading all config files in the project.
+
+        Loads all YAML config files from the same directory/project to build complete context.
+        """
+        context = {}
+
+        # Step 1: Load all YAML config files from the same directory
+        config_dir = yaml_path.parent
+        for yaml_file in config_dir.glob('*.yml'):
+            if yaml_file == yaml_path:
+                continue  # Skip the enrichment file itself
+
+            try:
+                with open(yaml_file, 'r', encoding='utf-8') as f:
+                    config_data = yaml.safe_load(f)
+                    if config_data and isinstance(config_data, dict):
+                        # Merge top-level key-value pairs
+                        for key, value in config_data.items():
+                            if isinstance(value, (str, int, float, bool)):
+                                context[key] = value
+                        logger.debug(f"Loaded enrichment context from {yaml_file.name}")
+            except Exception as e:
+                logger.debug(f"Failed to load config {yaml_file.name}: {e}")
+
+        # Step 2: Find workflows in the same project directory that include this enrichment YAML
+        try:
+            yaml_rel_path = yaml_path.relative_to(workflow_dir)
+            yaml_name = yaml_path.name
+
+            # Get the project directory (parent of config/)
+            project_dir = yaml_path.parent.parent if yaml_path.parent.name in ['config', 'configs'] else yaml_path.parent
+
+            for file_path, doc in docs:
+                # Only consider workflows from the same project directory
+                if not str(file_path).startswith(str(project_dir)):
+                    continue
+
+                # Extract _export variables from workflows
+                if '_export' in doc:
+                    export_vars = self._extract_export_vars(doc)
+                    context.update(export_vars)
+
+                    # Check if this workflow specifically includes the enrichment YAML
+                    export_section = doc['_export']
+                    if isinstance(export_section, dict):
+                        for key, value in export_section.items():
+                            if isinstance(value, str) and (str(yaml_rel_path) in value or yaml_name in value):
+                                logger.debug(f"Found workflow {file_path.name} that includes {yaml_name}")
+                                break
+        except Exception as e:
+            logger.debug(f"Error finding parent workflows: {e}")
+
+        logger.debug(f"Enrichment context for {yaml_path.name}: {list(context.keys())}")
+        return context
+
+    def _extract_export_vars(self, doc: Dict) -> Dict:
+        """Extract variables from _export section of a workflow."""
+        vars_dict = {}
+        if '_export' not in doc:
+            return vars_dict
+
+        export_section = doc['_export']
+        if not isinstance(export_section, dict):
+            return vars_dict
+
+        # Extract simple key-value pairs
+        for key, value in export_section.items():
+            if isinstance(value, (str, int, float, bool)):
+                vars_dict[key] = value
+
+        return vars_dict
+
+    def _create_enrichment_lineage(self, table_entry: Dict, context: Dict, yaml_path: Path) -> Optional[TaskLineage]:
+        """
+        Create a synthetic TaskLineage for an enrichment table entry.
+
+        Args:
+            table_entry: Single table entry from enrichment YAML
+            context: Variable resolution context
+            yaml_path: Path to the YAML file
+
+        Returns:
+            TaskLineage object or None if unable to create
+        """
+        try:
+            # Extract source table info
+            src_db_template = table_entry.get('database', '')
+            src_table = table_entry.get('table', '')
+
+            if not src_table:
+                return None
+
+            # Skip tables with unresolvable template variables in table name
+            if '${' in src_table:
+                logger.debug(f"Skipping table with template variable in name: {src_table}")
+                return None
+
+            # Resolve source database
+            src_db = self._simple_resolve(src_db_template, context)
+
+            # Check if source database was fully resolved
+            if '${' in src_db:
+                logger.debug(f"Skipping {src_table}: cannot resolve source database '{src_db}'")
+                return None
+
+            # Get required variables for enrichment
+            unif_name = context.get('unif_name')
+            canonical_id = context.get('canonical_id_name')
+
+            # Skip if critical variables are missing
+            if not unif_name:
+                logger.debug(f"Skipping {src_table}: missing 'unif_name' in context")
+                return None
+            if not canonical_id:
+                logger.debug(f"Skipping {src_table}: missing 'canonical_id_name' in context")
+                return None
+
+            # Build enrichment database and table names
+            unif_db = f"cdp_unification_{unif_name}"
+
+            # Determine enrichment table prefix (can be 'enrich_' or 'enriched_')
+            # Check context for explicit configuration
+            enrich_prefix = context.get('enrich_prefix', context.get('enrichment_prefix', None))
+            if not enrich_prefix:
+                # Try both common patterns - prefer 'enrich_' as default
+                enrich_prefix = 'enrich_'
+
+            enrich_table = f"{enrich_prefix}{src_table}"
+            lookup_table = f"{canonical_id}_lookup"
+
+            # Create table references
+            sources = [
+                TableReference(name=src_table, database=src_db),
+                TableReference(name=lookup_table, database=unif_db)
+            ]
+            targets = [
+                TableReference(name=enrich_table, database=unif_db)
+            ]
+
+            sql_lineage = SQLLineage(sources=sources, targets=targets, resolved=True)
+
+            return TaskLineage(
+                task_name=f"enrich_{src_table}",
+                workflow_name=f"enrichment/{yaml_path.stem}",
+                sql_file=f"-- Synthetic lineage inferred from enrichment config: {yaml_path.name}\n-- Enriches {src_db}.{src_table} → {unif_db}.{enrich_table} using {unif_db}.{lookup_table}",
+                lineage=sql_lineage
+            )
+
+        except Exception as e:
+            logger.debug(f"Failed to create enrichment lineage for {table_entry.get('table', 'unknown')}: {e}")
+            return None
+
+    def _simple_resolve(self, template: str, context: Dict) -> str:
+        """Simple variable resolution for ${var} patterns."""
+        if not isinstance(template, str):
+            return str(template)
+
+        result = template
+        # Replace ${var} patterns
+        import re
+        for match in re.finditer(r'\$\{([^}]+)\}', template):
+            var_name = match.group(1)
+            if var_name in context:
+                result = result.replace(match.group(0), str(context[var_name]))
+
+        return result
+
 
 @dataclass
 class LineageGraph:
@@ -671,7 +1001,6 @@ class LineageGraph:
         # Improve spacing for readability
         dot.attr(nodesep='0.8')  # Horizontal spacing between nodes
         dot.attr(ranksep='1.5')  # Vertical spacing between ranks
-        dot.attr(splines='ortho')  # Use orthogonal edges for cleaner look
         
         # Determine which tables to include
         if table_filter:
@@ -749,7 +1078,16 @@ class LineageGraph:
                     if edge not in edges_added:
                         dot.edge(source.full_name, target.full_name)
                         edges_added.add(edge)
-        
+
+        # Use faster spline algorithm for large graphs to prevent rendering timeouts
+        # ortho (orthogonal) looks cleaner but is O(n³) complexity
+        # polyline is much faster for graphs with many edges
+        if len(edges_added) > 200:
+            dot.attr(splines='polyline')
+            logger.info(f"Using polyline splines for large graph ({len(edges_added)} edges)")
+        else:
+            dot.attr(splines='ortho')
+
         # Render to SVG
         output_path.parent.mkdir(parents=True, exist_ok=True)
         svg_path = dot.render(str(output_path), format='svg', cleanup=True)
@@ -1520,28 +1858,44 @@ document.body.appendChild(dbFilter);
         
         return related
     
-    def _get_upstream_recursive(self, table_name: str, depth: int) -> Set[str]:
-        """Recursively get upstream tables"""
+    def _get_upstream_recursive(self, table_name: str, depth: int, visited: Optional[Set[str]] = None) -> Set[str]:
+        """Recursively get upstream tables with cycle detection"""
         if depth <= 0:
             return set()
-        
+
+        if visited is None:
+            visited = set()
+
+        # Cycle detection: if we've already visited this table, skip it
+        if table_name in visited:
+            return set()
+
+        visited.add(table_name)
         upstream = self.get_upstream_tables(table_name)
         result = upstream.copy()
-        
+
         for table in upstream:
-            result.update(self._get_upstream_recursive(table, depth - 1))
-        
+            result.update(self._get_upstream_recursive(table, depth - 1, visited))
+
         return result
     
-    def _get_downstream_recursive(self, table_name: str, depth: int) -> Set[str]:
-        """Recursively get downstream tables"""
+    def _get_downstream_recursive(self, table_name: str, depth: int, visited: Optional[Set[str]] = None) -> Set[str]:
+        """Recursively get downstream tables with cycle detection"""
         if depth <= 0:
             return set()
-        
+
+        if visited is None:
+            visited = set()
+
+        # Cycle detection: if we've already visited this table, skip it
+        if table_name in visited:
+            return set()
+
+        visited.add(table_name)
         downstream = self.get_downstream_tables(table_name)
         result = downstream.copy()
-        
+
         for table in downstream:
-            result.update(self._get_downstream_recursive(table, depth - 1))
-        
+            result.update(self._get_downstream_recursive(table, depth - 1, visited))
+
         return result

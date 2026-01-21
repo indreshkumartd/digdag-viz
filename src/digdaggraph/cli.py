@@ -836,7 +836,15 @@ def main(argv=None):
             # Add to graph
             for task_lineage in task_lineages:
                 lineage_graph.add_task_lineage(task_lineage)
-        
+
+        # Extract enrichment lineages from YAML configs (for TD enrichment patterns)
+        from .lineage import EnrichmentLineageExtractor
+        enrichment_extractor = EnrichmentLineageExtractor()
+        enrichment_lineages = enrichment_extractor.extract_from_directory(input_path, docs)
+        logger.info(f"Extracted {len(enrichment_lineages)} enrichment lineages from YAML configs")
+        for enrich_lineage in enrichment_lineages:
+            lineage_graph.add_task_lineage(enrich_lineage)
+
         # Get all tables and generate individual graphs
         all_tables = lineage_graph.get_all_tables()
         lineage_data = []

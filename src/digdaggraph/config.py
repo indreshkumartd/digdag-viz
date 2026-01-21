@@ -77,11 +77,12 @@ class Config:
             if 'output' in file_config:
                 self.config['output_dir'] = file_config['output'].get('directory', self.config['output_dir'])
                 self.config['graph_format'] = file_config['output'].get('format', self.config['graph_format'])
-            
+
             if 'graph' in file_config:
-                self.config['graph_direction'] = file_config['graph'].get('direction', self.config['graph_direction'])
-                self.config['max_depth'] = file_config['graph'].get('max_depth', self.config['max_depth'])
-                self.config['include_schedule'] = file_config['graph'].get('include_schedule', self.config['include_schedule'])
+                graph_config = file_config['graph']
+                self.config['graph_direction'] = graph_config.get('direction', self.config['graph_direction'])
+                self.config['max_depth'] = graph_config.get('max_depth', self.config['max_depth'])
+                self.config['include_schedule'] = graph_config.get('include_schedule', self.config['include_schedule'])
             
             if 'filters' in file_config:
                 self.config['exclude_patterns'] = file_config['filters'].get('exclude_patterns', self.config['exclude_patterns'])

@@ -38,6 +38,8 @@ NODE_COLORS = {
     "require>": "#9013FE",  # Purple
     "loop>": "#50E3C2",     # Teal
     "for_each>": "#50E3C2", # Teal
+    "for_range>": "#50E3C2", # Teal
+    "td_for_each>": "#50E3C2", # Teal
     "sh>": "#7ED321",       # Green
     "td>": "#4A90E2",       # Blue
     "echo>": "#9B9B9B",     # Light Gray
@@ -61,6 +63,8 @@ OPERATOR_ICONS = {
     "require>": "🔗",
     "loop>": "🔄",
     "for_each>": "🔄",
+    "for_range>": "🔄",
+    "td_for_each>": "🔄",
     "if>": "❓",
     "mail>": "📧",
     "http>": "🌐",
@@ -229,8 +233,8 @@ def render_tasks(
             # require> and call> are handled via URLs in interactive mode
             # No need to create separate visual nodes for them
 
-            # loop> / for_each> / for_range> annotate
-            for loopish in ("loop>", "for_each>", "for_range>"):
+            # loop> / for_each> / for_range> / td_for_each> annotate
+            for loopish in ("loop>", "for_each>", "for_range>", "td_for_each>"):
                 if loopish in tbody:
                     g.edge(node_id, node_id, label=loopish, style="dotted", dir="none")
 
@@ -364,23 +368,27 @@ def build_interactive_graph(
         root_id = f"{wf_name}__root"
         # Root node styling
         shape, color, penwidth = style_for("root", custom_colors)
-        
-        # Add root to both
-        g_svg.node(root_id, wf_name, shape=shape, style="rounded", color=color, penwidth=penwidth, URL="../../index.html", tooltip="Back to index")
-        g_map.node(root_id, wf_name, shape=shape, style="rounded", color=color, penwidth=penwidth, URL="../../index.html", tooltip="Back to index")
+
+        # Add root to both (no URL to avoid broken links - root is just visual)
+        g_svg.node(root_id, wf_name, shape=shape, style="rounded", color=color, penwidth=penwidth, tooltip=wf_name)
+        g_map.node(root_id, wf_name, shape=shape, style="rounded", color=color, penwidth=penwidth, tooltip=wf_name)
 
         # Collect top-level tasks
         top_tasks = [(k, v) for k, v in doc.items() if is_task_key(k)]
-        
+
         # Collect task definitions for sidebar
         task_defs = {}
-        
+
+        # Initialize loop completion tracking
+        loop_completion_nodes = set()
+
         render_tasks_with_links(
             g_svg, g_map, doc, [wf_name], top_tasks,
             custom_colors, max_depth, 0,
             file_path, outdir, project_root,
             task_defs=task_defs,
-            initial_prev_nodes=[root_id]
+            initial_prev_nodes=[root_id],
+            loop_completion_nodes=loop_completion_nodes
         )
 
         # Handle root-level special directive blocks (_error, _do, _else_do)
@@ -425,7 +433,8 @@ def build_interactive_graph(
                     directive_child_tasks, custom_colors, max_depth, 1,
                     file_path, outdir, project_root,
                     task_defs=task_defs,
-                    initial_prev_nodes=[directive_id]
+                    initial_prev_nodes=[directive_id],
+                    loop_completion_nodes=loop_completion_nodes
                 )
 
 
@@ -472,21 +481,26 @@ def render_tasks_with_links(
     project_root: Optional[Path],
     parent_is_parallel: bool = False,
     task_defs: Optional[Dict[str, Any]] = None,
-    initial_prev_nodes: Optional[List[str]] = None
+    initial_prev_nodes: Optional[List[str]] = None,
+    loop_completion_nodes: Optional[set] = None
 ) -> List[str]:
     """Render tasks recursively with links for interactive map."""
     if max_depth is not None and current_depth >= max_depth:
         logger.debug(f"Reached max depth {max_depth}, skipping deeper tasks")
         return []
-    
+
+    # Initialize loop completion tracking (shared across all recursive calls)
+    if loop_completion_nodes is None:
+        loop_completion_nodes = set()
+
     # Track completion points from previous sibling (sequential) or all siblings (parallel)
     prev_last_nodes: List[str] = list(initial_prev_nodes) if initial_prev_nodes else []
     all_parallel_last_nodes: List[str] = []  # Accumulate when parent_is_parallel
-    
+
     for (tkey, tbody) in tasks:
         tname = tkey.replace("+", "")
         node_id = normalized_id(parent_stack, tname)
-        
+
         # Store definition if tracking
         if task_defs is not None and isinstance(tbody, dict):
             task_defs[node_id] = tbody
@@ -581,19 +595,30 @@ def render_tasks_with_links(
 
         # Check if this is a parallel group container
         is_parallel_group = False
+        has_loop_operator = False
         if isinstance(tbody, dict):
             is_parallel_group = tbody.get("_parallel", False)
+            # Check if this task has a loop operator that requires a visible node
+            has_loop_operator = any(op in tbody for op in ("loop>", "for_each>", "for_range>", "td_for_each>"))
 
-        # Skip node creation entirely for parallel group containers
-        # The children will be rendered in the cluster and connect from prev_last_nodes
-        if not is_parallel_group:
+        # Skip node creation ONLY if it's a parallel group WITHOUT a loop operator
+        # Tasks with loop operators need a node to show the loop (even if _parallel)
+        should_create_node = not is_parallel_group or has_loop_operator
+
+        if should_create_node:
             # Add URL to task_defs for sidebar
             if task_defs is not None and node_id in task_defs:
                 task_defs[node_id]['_url'] = url
 
             # Add node to SVG graph
-            g_svg.node(node_id, label, shape=shape, style="rounded,filled", color=color, penwidth=penwidth, fillcolor="white", URL=url, tooltip=tooltip, id=node_id)
-            g_map.node(node_id, label, shape=shape, style="rounded,filled", color=color, penwidth=penwidth, fillcolor="white", URL=url, tooltip=tooltip)
+            # Only add URL attribute if it's a valid link (not "#")
+            if url and url != "#":
+                g_svg.node(node_id, label, shape=shape, style="rounded,filled", color=color, penwidth=penwidth, fillcolor="white", URL=url, tooltip=tooltip, id=node_id)
+                g_map.node(node_id, label, shape=shape, style="rounded,filled", color=color, penwidth=penwidth, fillcolor="white", URL=url, tooltip=tooltip)
+            else:
+                # No URL - node is not clickable via SVG link, but still interactive via JS
+                g_svg.node(node_id, label, shape=shape, style="rounded,filled", color=color, penwidth=penwidth, fillcolor="white", tooltip=tooltip, id=node_id)
+                g_map.node(node_id, label, shape=shape, style="rounded,filled", color=color, penwidth=penwidth, fillcolor="white", tooltip=tooltip)
 
             # Connect from previous nodes
             # Special case: if we have initial_prev_nodes, these are entry points from upstream
@@ -601,24 +626,29 @@ def render_tasks_with_links(
             if prev_last_nodes:
                 if not parent_is_parallel or (parent_is_parallel and initial_prev_nodes):
                     for last_node in prev_last_nodes:
-                        g_svg.edge(last_node, node_id)
-                        g_map.edge(last_node, node_id)
+                        # Add label if connecting from a loop completion node
+                        edge_attrs = {}
+                        if last_node in loop_completion_nodes:
+                            edge_attrs = {"label": " after all iterations ", "fontsize": "10", "fontcolor": "#666"}
+                        g_svg.edge(last_node, node_id, **edge_attrs)
+                        g_map.edge(last_node, node_id, **edge_attrs)
         
         # Current task's last nodes (default to itself)
         current_task_last_nodes: List[str] = []
 
         if isinstance(tbody, dict):
-            # Operator-specific edges
-            for loopish in ("loop>", "for_each>", "for_range>"):
-                if loopish in tbody:
-                    g_svg.edge(node_id, node_id, label=loopish, style="dotted", dir="none")
-                    g_map.edge(node_id, node_id, label=loopish, style="dotted", dir="none")
+            # Operator-specific edges (only if we created a node)
+            if should_create_node:
+                for loopish in ("loop>", "for_each>", "for_range>", "td_for_each>"):
+                    if loopish in tbody:
+                        g_svg.edge(node_id, node_id, label=loopish, style="dotted", dir="none")
+                        g_map.edge(node_id, node_id, label=loopish, style="dotted", dir="none")
 
-            if "retry" in tbody:
-                # Add a self-loop or similar to indicate retry
-                # For now, just a dotted edge to self
-                g_svg.edge(node_id, node_id, label="retry", style="dotted")
-                g_map.edge(node_id, node_id, label="retry", style="dotted")
+                if "retry" in tbody:
+                    # Add a self-loop or similar to indicate retry
+                    # For now, just a dotted edge to self
+                    g_svg.edge(node_id, node_id, label="retry", style="dotted")
+                    g_map.edge(node_id, node_id, label="retry", style="dotted")
             
             # Handle special directive blocks (_error, _do, _else_do) AFTER regular tasks
             # These need special handling because they don't start with +
@@ -649,10 +679,11 @@ def render_tasks_with_links(
                 g_map.node(directive_id, label=f"{icon} {directive_label}",
                           shape=directive_shape, color=color, style="filled",
                           fillcolor=f"{color}20", fontname="Inter")
-                
-                # Connect parent task to directive with dashed line
-                g_svg.edge(node_id, directive_id, style="dashed", label=directive_name, color=color)
-                g_map.edge(node_id, directive_id, style="dashed", label=directive_name, color=color)
+
+                # Connect parent task to directive with dashed line (only if parent node exists)
+                if should_create_node:
+                    g_svg.edge(node_id, directive_id, style="dashed", label=directive_name, color=color)
+                    g_map.edge(node_id, directive_id, style="dashed", label=directive_name, color=color)
                 
                 # Recursively render directive's child tasks
                 directive_child_tasks = [(k, v) for k, v in directive_body.items() if is_task_key(k)]
@@ -662,30 +693,40 @@ def render_tasks_with_links(
                         directive_child_tasks, custom_colors, max_depth, current_depth + 1,
                         file_path, outdir, project_root,
                         task_defs=task_defs,
-                        initial_prev_nodes=[directive_id]
+                        initial_prev_nodes=[directive_id],
+                        loop_completion_nodes=loop_completion_nodes
                     )
 
             is_parallel = tbody.get("_parallel", False)
+
+            # Mark loop completion nodes early (before checking child_tasks)
+            # Loop nodes are completion points even if they only have directive blocks
+            if has_loop_operator and should_create_node:
+                loop_completion_nodes.add(node_id)
 
             # Recurse
             child_tasks = [(k, v) for k, v in tbody.items() if is_task_key(k)]
             if child_tasks:
                 # Determine what the children should connect from
-                if is_parallel_group:
-                    # Parallel group: children connect from OUR previous nodes
-                    nodes_to_connect_from = prev_last_nodes
-                else:
-                    # Sequential group: children connect from US
+                # If we created a node (including loop operators), children connect from that node
+                # If we skipped node creation (pure parallel group), children connect from upstream
+                if should_create_node:
+                    # We created a node: children connect from THIS node
                     nodes_to_connect_from = [node_id]
+                else:
+                    # No node created (pure parallel group): children connect from upstream
+                    nodes_to_connect_from = prev_last_nodes
 
                 if is_parallel:
                     # Create a cluster for parallel tasks
                     cluster_name = f"cluster_{node_id}"
-                    
+
                     # IMPORTANT: Create entry edges BEFORE entering cluster context
                     # This prevents external nodes (like root) from being pulled into the cluster
-                    if is_parallel_group and nodes_to_connect_from:
-                        # Connect from upstream nodes to each parallel child
+                    # Only create these edges if we skipped node creation (pure parallel group)
+                    # If we created a node, edges from that node will be created later
+                    if not should_create_node and nodes_to_connect_from:
+                        # Pure parallel group without a node: connect from upstream to each child
                         for child_key, child_body in child_tasks:
                             child_node_id = normalized_id(parent_stack + [tkey], child_key.replace("+", ""))
                             for upstream_node in nodes_to_connect_from:
@@ -695,14 +736,16 @@ def render_tasks_with_links(
                     with g_svg.subgraph(name=cluster_name) as c:
                         c.attr(style='dashed', color='#aaaaaa', label='parallel', fontcolor='#aaaaaa', fontsize='10')
                         
-                        # Pass None for initial_prev_nodes since we already created the entry edges
+                        # Pass None for initial_prev_nodes if edges were already created above
+                        # Otherwise pass nodes_to_connect_from to create edges normally
                         child_last_nodes = render_tasks_with_links(
                             c, g_map, doc, parent_stack + [tkey], child_tasks,
                             custom_colors, max_depth, current_depth + 1,
                             file_path, outdir, project_root,
                             parent_is_parallel=is_parallel,
                             task_defs=task_defs,
-                            initial_prev_nodes=None if is_parallel_group else nodes_to_connect_from
+                            initial_prev_nodes=None if not should_create_node else nodes_to_connect_from,
+                            loop_completion_nodes=loop_completion_nodes
                         )
                 else:
                     child_last_nodes = render_tasks_with_links(
@@ -711,17 +754,30 @@ def render_tasks_with_links(
                         file_path, outdir, project_root,
                         parent_is_parallel=is_parallel,
                         task_defs=task_defs,
-                        initial_prev_nodes=nodes_to_connect_from
+                        initial_prev_nodes=nodes_to_connect_from,
+                        loop_completion_nodes=loop_completion_nodes
                     )
                 # This task completes when all its children complete
-                current_task_last_nodes = child_last_nodes
+                # Special case: for loop operators, the LOOP NODE is the completion point
+                # (not the individual iteration children), since subsequent tasks wait for ALL iterations
+                if has_loop_operator and should_create_node:
+                    # Loop completion: return THIS node, not children
+                    current_task_last_nodes = [node_id]
+                else:
+                    # Normal case: task completes when children complete
+                    current_task_last_nodes = child_last_nodes
             else:
-                # Leaf task - it completes itself
-                current_task_last_nodes = [node_id]
+                # No child tasks
+                # For loop operators, completion is still the loop node itself
+                # For other tasks, completion is the task itself
+                if has_loop_operator and should_create_node:
+                    current_task_last_nodes = [node_id]
+                else:
+                    current_task_last_nodes = [node_id]
         else:
             # Non-dict task body (edge case)
             current_task_last_nodes = [node_id]
-        
+
         # Update tracking based on whether we're in parallel mode
         if parent_is_parallel:
             # Accumulate ALL children's last nodes
@@ -729,7 +785,7 @@ def render_tasks_with_links(
         else:
             # Sequential: next sibling connects from this task's completion
             prev_last_nodes = current_task_last_nodes
-    
+
     # Return appropriate last nodes
     if parent_is_parallel:
         return all_parallel_last_nodes

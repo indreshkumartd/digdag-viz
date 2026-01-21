@@ -1336,6 +1336,14 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
     scene.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       if (e.target.closest('.node') || e.target.closest('a')) return;
+
+      // Clear focus when clicking outside nodes (unless in tour mode)
+      if (focusActive && !tourActive) {
+        clearFocus();
+        closeSidebar();
+        updateHash(null, false);
+      }
+
       isPanning = true;
       panStartX = e.clientX - panX;
       panStartY = e.clientY - panY;
@@ -1599,7 +1607,8 @@ DEFAULT_INTERACTIVE_TEMPLATE = """<!doctype html>
         edges.forEach(e => e.classList.remove('dimmed', 'upstream', 'downstream'));
       });
       
-      node.addEventListener('click', () => {
+      node.addEventListener('click', (e) => {
+        e.stopPropagation(); // Prevent bubbling to scene mousedown handler
         focusNode(nodeId, { openSidebar: true, setHash: true, center: false });
       });
     });

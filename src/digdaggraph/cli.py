@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
+from cron_descriptor import get_description
+
 from .config import Config
 from .logger import setup_logging, get_logger
 from .parser import load_dig_docs, find_workflow_name, schedule_info, is_task_key, task_operator
@@ -19,7 +21,7 @@ logger = get_logger(__name__)
 
 
 def _cron_to_human(cron_expr: str) -> str:
-    """Convert cron expression to human-readable format.
+    """Convert cron expression to human-readable format using cron-descriptor library.
 
     Args:
         cron_expr: Cron expression (minute hour day month dayOfWeek)
@@ -28,94 +30,7 @@ def _cron_to_human(cron_expr: str) -> str:
         Human-readable description
     """
     try:
-        parts = cron_expr.strip().split()
-        if len(parts) < 5:
-            return "Custom schedule"
-
-        minute, hour, day, month, day_of_week = parts[:5]
-
-        # Helper function to parse ranges
-        def parse_field(field, field_name):
-            if field == '*':
-                return f"every {field_name}"
-            elif '/' in field:
-                base, interval = field.split('/')
-                if base == '*':
-                    return f"every {interval} {field_name}s"
-                return f"every {interval} {field_name}s starting from {base}"
-            elif '-' in field:
-                start, end = field.split('-')
-                return f"{field_name}s {start} to {end}"
-            elif ',' in field:
-                values = field.split(',')
-                return f"{field_name}s {', '.join(values)}"
-            else:
-                return f"{field_name} {field}"
-
-        # Build description
-        desc_parts = []
-
-        # Time (minute and hour)
-        if minute == '*' and hour == '*':
-            desc_parts.append("Every minute")
-        elif minute != '*' and hour == '*':
-            if minute == '0':
-                desc_parts.append("Every hour")
-            elif '/' in minute:
-                interval = minute.split('/')[1]
-                desc_parts.append(f"Every {interval} minutes")
-            else:
-                desc_parts.append(f"At minute {minute} of every hour")
-        elif minute == '*' and hour != '*':
-            if '/' in hour:
-                interval = hour.split('/')[1]
-                if interval == '1':
-                    desc_parts.append("Every hour")
-                else:
-                    desc_parts.append(f"Every {interval} hours")
-            elif '-' in hour:
-                start, end = hour.split('-')
-                desc_parts.append(f"Every minute between {start}:00 and {end}:59")
-            else:
-                desc_parts.append(f"Every minute at hour {hour}")
-        else:
-            # Specific time with both minute and hour set
-            if '/' in hour:
-                interval = hour.split('/')[1]
-                if interval == '1':
-                    desc_parts.append(f"At minute {minute} every hour")
-                else:
-                    desc_parts.append(f"At minute {minute} every {interval} hours")
-            elif '-' in hour:
-                start, end = hour.split('-')
-                desc_parts.append(f"At minute {minute} between hours {start} and {end}")
-            else:
-                desc_parts.append(f"At {hour.zfill(2)}:{minute.zfill(2)}")
-
-        # Day constraints
-        if day != '*' or day_of_week != '*':
-            if day != '*' and day_of_week == '*':
-                if day == '1':
-                    desc_parts.append("on the 1st of every month")
-                else:
-                    desc_parts.append(f"on day {day} of every month")
-            elif day == '*' and day_of_week != '*':
-                days = {'0': 'Sunday', '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday',
-                       '4': 'Thursday', '5': 'Friday', '6': 'Saturday', '7': 'Sunday'}
-                desc_parts.append(f"on {days.get(day_of_week, f'day {day_of_week}')}")
-            else:
-                desc_parts.append(f"on day {day}")
-        else:
-            desc_parts.append("every day")
-
-        # Month
-        if month != '*':
-            months = {'1': 'January', '2': 'February', '3': 'March', '4': 'April',
-                     '5': 'May', '6': 'June', '7': 'July', '8': 'August',
-                     '9': 'September', '10': 'October', '11': 'November', '12': 'December'}
-            desc_parts.append(f"in {months.get(month, f'month {month}')}")
-
-        return ' '.join(desc_parts)
+        return get_description(cron_expr)
     except Exception:
         return "Custom schedule"
 
